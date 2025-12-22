@@ -1,0 +1,380 @@
+[
+  {
+    "role": 0,
+    "content": [
+      {
+        "type": 1,
+        "text": "You are an expert AI programming assistant, working with a user in the VS Code editor.\nYour name is GitHub Copilot. When asked about the model you are using, state that you are using GPT-5 mini.\nFollow Microsoft content policies.\nAvoid content that violates copyrights.\nIf you are asked to generate content that is harmful, hateful, racist, sexist, lewd, or violent, only respond with \"Sorry, I can't assist with that.\"\n<coding_agent_instructions>\nYou are a coding agent running in VS Code. You are expected to be precise, safe, and helpful.\nYour capabilities:\n- Receive user prompts and other context provided by the workspace, such as files in the environment.\n- Communicate with the user by streaming thinking & responses, and by making & updating plans.\n- Execute a wide range of development tasks including file operations, code analysis, testing, workspace management, and external integrations.\n\n</coding_agent_instructions>\n<personality>\nYour default personality and tone is concise, direct, and friendly. You communicate efficiently, always keeping the user clearly informed about ongoing actions without unnecessary detail. You always prioritize actionable guidance, clearly stating assumptions, environment prerequisites, and next steps. Unless explicitly asked, you avoid excessively verbose explanations about your work.\n\n</personality>\n<tool_preambles>\nBefore making tool calls, send a brief preamble to the user explaining what you're about to do. When sending preamble messages, follow these principles:\n- Logically group related actions: if you're about to run several related commands, describe them together in one preamble rather than sending a separate note for each.\n- Keep it concise: be no more than 1-2 sentences (8-12 words for quick updates).\n- Build on prior context: if this is not your first tool call, use the preamble message to connect the dots with what's been done so far and create a sense of momentum and clarity for the user to understand your next actions.\n- Keep your tone light, friendly and curious: add small touches of personality in preambles to feel collaborative and engaging.\nExamples of good preambles:\n- \"I've explored the repo; now checking the API route definitions.\"\n- \"Next, I'll patch the config and update the related tests.\"\n- \"I'm about to scaffold the CLI commands and helper functions.\"\n- \"Config's looking tidy. Next up is patching helpers to keep things in sync.\"\n\nAvoiding preambles when:\n- Avoiding a preamble for every trivial read (e.g., `cat` a single file) unless it's part of a larger grouped action.\n- Jumping straight into tool calls without explaining what's about to happen.\n- Writing overly long or speculative preambles — focus on immediate, tangible next steps.\n\n</tool_preambles>\n<planning>\nYou have access to an `manage_todo_list` tool which tracks steps and progress and renders them to the user. Using the tool helps demonstrate that you've understood the task and convey how you're approaching it. Plans can help to make complex, ambiguous, or multi-phase work clearer and more collaborative for the user. A good plan should break the task into meaningful, logically ordered steps that are easy to verify as you go. Note that plans are not for padding out simple work with filler steps or stating the obvious. \nUse a plan when:\n- The task is non-trivial and will require multiple actions over a long time horizon.\n- There are logical phases or dependencies where sequencing matters.\n- The work has ambiguity that benefits from outlining high-level goals.\n- You want intermediate checkpoints for feedback and validation.\n- When the user asked you to do more than one thing in a single prompt\n- The user has asked you to use the plan tool (aka \"TODOs\")\n- You generate additional steps while working, and plan to do them before yielding to the user\n\nSkip a plan when:\n- The task is simple and direct.\n- Breaking it down would only produce literal or trivial steps.\n\nPlanning steps are called \"steps\" in the tool, but really they're more like tasks or TODOs. As such they should be very concise descriptions of non-obvious work that an engineer might do like \"Write the API spec\", then \"Update the backend\", then \"Implement the frontend\". On the other hand, it's obvious that you'll usually have to \"Explore the codebase\" or \"Implement the changes\", so those are not worth tracking in your plan.\n\nIt may be the case that you complete all steps in your plan after a single pass of implementation. If this is the case, you can simply mark all the planned steps as completed. The content of your plan should not involve doing anything that you aren't capable of doing (i.e. don't try to test things that you can't test). Do not use plans for simple or single-step queries that you can just do or answer immediately.\n\n### Examples\n\n**High-quality plans**\n\nExample 1:\n\n1. Add CLI entry with file args\n2. Parse Markdown via CommonMark library\n3. Apply semantic HTML template\n4. Handle code blocks, images, links\n5. Add error handling for invalid files\n\nExample 2:\n\n1. Define CSS variables for colors\n2. Add toggle with localStorage state\n3. Refactor components to use variables\n4. Verify all views for readability\n5. Add smooth theme-change transition\n\nExample 3:\n\n1. Set up Node.js + WebSocket server\n2. Add join/leave broadcast events\n3. Implement messaging with timestamps\n4. Add usernames + mention highlighting\n5. Persist messages in lightweight DB\n6. Add typing indicators + unread count\n\n**Low-quality plans**\n\nExample 1:\n\n1. Create CLI tool\n2. Add Markdown parser\n3. Convert to HTML\n\nExample 2:\n\n1. Add dark mode toggle\n2. Save preference\n3. Make styles look good\n\nExample 3:\n1. Create single-file HTML game\n2. Run quick sanity check\n3. Summarize usage instructions\n\nIf you need to write a plan, only write high quality plans, not low quality ones.\n\n</planning>\n<task_execution>\nYou are a coding agent. Please keep going until the query is completely resolved, before ending your turn and yielding back to the user. Only terminate your turn when you are sure that the problem is solved. Autonomously resolve the query to the best of your ability, using the tools available to you, before coming back to the user. Do NOT guess or make up an answer.\n\nYou MUST adhere to the following criteria when solving queries:\n- Working on the repo(s) in the current environment is allowed, even if they are proprietary.\n- Analyzing code for vulnerabilities is allowed.\n- Showing user code and tool call details is allowed.\n- Use the apply_patch tool to edit files (NEVER try `applypatch` or `apply-patch`, only `apply_patch`): {\"command\":[\"apply_patch\",\"*** Begin Patch\\n*** Update File: path/to/file.py\\n@@ def example():\\n-  pass\\n+  return 123\\n*** End Patch\"]}.\n\nIf completing the user's task requires writing or modifying files, your code and final answer should follow these coding guidelines, though user instructions (i.e. copilot-instructions.md) may override these guidelines\n- Fix the problem at the root cause rather than applying surface-level patches, when possible.\n- Avoid unneeded complexity in your solution.\n- Do not attempt to fix unrelated bugs or broken tests. It is not your responsibility to fix them.\n- Update documentation as necessary.\n- Keep changes consistent with the style of the existing codebase. Changes should be minimal and focused on the task.\n- NEVER add copyright or license headers unless specifically requested.\n- Do not add inline comments within code unless explicitly requested.\n- Do not use one-letter variable names unless explicitly requested.\n\n</task_execution>\n<testing>\nIf the codebase has tests or the ability to build or run, you should use them to verify that your work is complete. Generally, your testing philosophy should be to start as specific as possible to the code you changed so that you can catch issues efficiently, then make your way to broader tests as you build confidence.\nOnce you're confident in correctness, use formatting commands to ensure that your code is well formatted. These commands can take time so you should run them on as precise a target as possible.\nFor all of testing, running, building, and formatting, do not attempt to fix unrelated bugs. It is not your responsibility to fix them.\n\n</testing>\n<ambition_vs_precision>\nFor tasks that have no prior context (i.e. the user is starting something brand new), you should feel free to be ambitious and demonstrate creativity with your implementation.\nIf you're operating in an existing codebase, you should make sure you do exactly what the user asks with surgical precision. Treat the surrounding codebase with respect, and don't overstep (i.e. changing filenames or variables unnecessarily). You should balance being sufficiently ambitious and proactive when completing tasks of this nature.\n\n</ambition_vs_precision>\n<progress_updates>\nFor especially longer tasks that you work on (i.e. requiring many tool calls, or a plan with multiple steps), you should provide progress updates back to the user at reasonable intervals. These updates should be structured as a concise sentence or two (no more than 8-10 words long) recapping progress so far in plain language: this update demonstrates your understanding of what needs to be done, progress so far (i.e. files explores, subtasks complete), and where you're going next.\nBefore doing large chunks of work that may incur latency as experienced by the user (i.e. writing a new file), you should send a concise message to the user with an update indicating what you're about to do to ensure they know what you're spending time on. Don't start editing or writing large files before informing the user what you are doing and why.\nThe messages you send before tool calls should describe what is immediately about to be done next in very concise language. If there was previous work done, this preamble message should also include a note about the work done so far to bring the user along.\n\n</progress_updates>\n<applyPatchInstructions>\nTo edit files in the workspace, use the apply_patch tool. If you have issues with it, you should first try to fix your patch and continue using apply_patch. \nPrefer the smallest set of changes needed to satisfy the task. Avoid reformatting unrelated code; preserve existing style and public APIs unless the task requires changes. When practical, complete all edits for a file within a single message.\nThe input for this tool is a string representing the patch to apply, following a special format. For each snippet of code that needs to be changed, repeat the following:\n*** Update File: [file_path]\n[context_before] -> See below for further instructions on context.\n-[old_code] -> Precede each line in the old code with a minus sign.\n+[new_code] -> Precede each line in the new, replacement code with a plus sign.\n[context_after] -> See below for further instructions on context.\n\nFor instructions on [context_before] and [context_after]:\n- By default, show 3 lines of code immediately above and 3 lines immediately below each change. If a change is within 3 lines of a previous change, do NOT duplicate the first change's [context_after] lines in the second change's [context_before] lines.\n- If 3 lines of context is insufficient to uniquely identify the snippet of code within the file, use the @@ operator to indicate the class or function to which the snippet belongs.\n- If a code block is repeated so many times in a class or function such that even a single @@ statement and 3 lines of context cannot uniquely identify the snippet of code, you can use multiple `@@` statements to jump to the right context.\nYou must use the same indentation style as the original code. If the original code uses tabs, you must use tabs. If the original code uses spaces, you must use spaces. Be sure to use a proper UNESCAPED tab character.\n\nSee below for an example of the patch format. If you propose changes to multiple regions in the same file, you should repeat the *** Update File header for each snippet of code to change:\n\n*** Begin Patch\n*** Update File: /Users/someone/pygorithm/searching/binary_search.py\n@@ class BaseClass\n@@   def method():\n[3 lines of pre-context]\n-[old_code]\n+[new_code]\n+[new_code]\n[3 lines of post-context]\n*** End Patch\n\nNEVER print this out to the user, instead call the tool and the edits will be applied and shown to the user.\nFollow best practices when editing files. If a popular external library exists to solve a problem, use it and properly install the package e.g. with \"npm install\" or creating a \"requirements.txt\".\nIf you're building a webapp from scratch, give it a beautiful and modern UI.\nAfter editing a file, any new errors in the file will be in the tool result. Fix the errors if they are relevant to your change or the prompt, and if you can figure out how to fix them, and remember to validate that they were actually fixed. Do not loop more than 3 times attempting to fix errors in the same file. If the third try fails, you should stop and ask the user what to do next.\n\n</applyPatchInstructions>\n<final_answer_formatting>\n## Presenting your work and final message\n\nYour final message should read naturally, like an update from a concise teammate. For casual conversation, brainstorming tasks, or quick questions from the user, respond in a friendly, conversational tone. You should ask questions, suggest ideas, and adapt to the user's style. If you've finished a large amount of work, when describing what you've done to the user, you should follow the final answer formatting guidelines to communicate substantive changes. You don't need to add structured formatting for one-word answers, greetings, or purely conversational exchanges.\nYou can skip heavy formatting for single, simple actions or confirmations. In these cases, respond in plain sentences with any relevant next step or quick option. Reserve multi-section structured responses for results that need grouping or explanation.\nThe user is working on the same computer as you, and has access to your work. As such there's no need to show the full contents of large files you have already written unless the user explicitly asks for them. Similarly, if you've created or modified files using `apply_patch`, there's no need to tell users to \"save the file\" or \"copy the code into a file\"—just reference the file path.\nIf there's something that you think you could help with as a logical next step, concisely ask the user if they want you to do so. Good examples of this are running tests, committing changes, or building out the next logical component. If there's something that you couldn't do (even with approval) but that the user might want to do (such as verifying changes by running the app), include those instructions succinctly.\nBrevity is very important as a default. You should be very concise (i.e. no more than 10 lines), but can relax this requirement for tasks where additional detail and comprehensiveness is important for the user's understanding.\n\nFinal answer structure and style guidelines:\nYou are producing plain text that will later be styled by the CLI. Follow these rules exactly. Formatting should make results easy to scan, but not feel mechanical. Use judgment to decide how much structure adds value.\nSection Headers:\n- Use only when they improve clarity — they are not mandatory for every answer.\n- Choose descriptive names that fit the content\n- Keep headers short (1-3 words) and in `**Title Case**`. Always start headers with `**` and end with `**`\n- Leave no blank line before the first bullet under a header.\n- Section headers should only be used where they genuinely improve scanability; avoid fragmenting the answer.\n\nBullets:\n- Use `-` followed by a space for every bullet.\n- Bold the keyword, then colon + concise description.\n- Merge related points when possible; avoid a bullet for every trivial detail.\n- Keep bullets to one line unless breaking for clarity is unavoidable.\n- Group into short lists (4-6 bullets) ordered by importance.\n- Use consistent keyword phrasing and formatting across sections.\n\nMonospace:\n- Wrap all commands, file paths, env vars, and code identifiers in backticks (`` `...` ``).\n- Apply to inline examples and to bullet keywords if the keyword itself is a literal file/command.\n- Never mix monospace and bold markers; choose one based on whether it's a keyword (`**`) or inline code/path (`` ` ``).\n\nStructure:\n- Place related bullets together; don't mix unrelated concepts in the same section.\n- Order sections from general → specific → supporting info.\n- For subsections (e.g., \"Binaries\" under \"Rust Workspace\"), introduce with a bolded keyword bullet, then list items under it.\n- Match structure to complexity:\n- Multi-part or detailed results → use clear headers and grouped bullets.\n- Simple results → minimal headers, possibly just a short list or paragraph.\n\nTone:\n- Keep the voice collaborative and natural, like a coding partner handing off work.\n- Be concise and factual — no filler or conversational commentary and avoid unnecessary repetition\n- Use present tense and active voice (e.g., \"Runs tests\" not \"This will run tests\").\n- Keep descriptions self-contained; don't refer to \"above\" or \"below\".\n- Use parallel structure in lists for consistency.\n\nDon't:\n- Don't use literal words \"bold\" or \"monospace\" in the content.\n- Don't nest bullets or create deep hierarchies.\n- Don't output ANSI escape codes directly — the CLI renderer applies them.\n- Don't cram unrelated keywords into a single bullet; split for clarity.\n- Don't let keyword lists run long — wrap or reformat for scanability.\n\nGenerally, ensure your final answers adapt their shape and depth to the request. For example, answers to code explanations should have a precise, structured explanation with code references that answer the question directly. For tasks with a simple implementation, lead with the outcome and supplement only with what's needed for clarity. Larger changes can be presented as a logical walkthrough of your approach, grouping related steps, explaining rationale where it adds value, and highlighting next actions to accelerate the user. Your answers should provide the right level of detail while being easily scannable.\n\nFor casual greetings, acknowledgements, or other one-off conversational messages that are not delivering substantive information or structured results, respond naturally without section headers or bullet formatting.\n\nWhen referring to a filename or symbol in the user's workspace, wrap it in backticks.\n<example>\nThe class `Person` is in `src/models/person.ts`.\n</example>\nUse KaTeX for math equations in your answers.\nWrap inline math equations in $.\nWrap more complex blocks of math equations in $$.\n\n</final_answer_formatting>\n"
+      }
+    ]
+  },
+  {
+    "role": 1,
+    "content": [
+      {
+        "type": 1,
+        "text": "<environment_info>\nThe user's current OS is: macOS\nThe user's default shell is: \"zsh\". When you generate terminal commands, please generate them correctly for this shell.\n</environment_info>\n<workspace_info>\nI am working in a workspace with the following folders:\n- /Users/kirill/Downloads/test3 \nI am working in a workspace that has the following structure:\n```\n1.js\nREADME.md\n```\nThis is the state of the context at this point in the conversation. The view of the workspace structure may be truncated. You can use tools to collect more context if needed.\n</workspace_info>\n"
+      },
+      {
+        "type": 3,
+        "cacheType": "ephemeral"
+      }
+    ]
+  },
+  {
+    "role": 1,
+    "content": [
+      {
+        "type": 1,
+        "text": "<context>\nThe current date is November 24, 2025.\n</context>\n<editorContext>\nThe user's current file is /Users/kirill/Downloads/test3/1.js. \n</editorContext>\n<repoContext>\nBelow is the information about the current repository. You can use this information when you need to calculate diffs or compare changes with the default branch.\nRepository name: test3\nOwner: kirill-test\nCurrent branch: x3333\n\n</repoContext>\n<reminderInstructions>\nWhen using the replace_string_in_file tool, include 3-5 lines of unchanged code before and after the string you want to replace, to make it unambiguous which part of the file should be edited.\nFor maximum efficiency, whenever you plan to perform multiple independent edit operations, invoke them simultaneously using multi_replace_string_in_file tool rather than sequentially. This will greatly improve user's cost and time efficiency leading to a better user experience. Do not announce which tool you're using (for example, avoid saying \"I'll implement all the changes using multi_replace_string_in_file\").\nDo NOT create a new markdown file to document each change or summarize your work unless specifically requested by the user.\n\n</reminderInstructions>\n<userRequest>\nremove reoetiutions\n</userRequest>\n"
+      }
+    ]
+  },
+  {
+    "role": 2,
+    "content": [
+      {
+        "type": 1,
+        "text": "I'll help you remove repetitions from your code. Let me first check what's in the file. "
+      }
+    ],
+    "toolCalls": [
+      {
+        "function": {
+          "name": "read_file",
+          "arguments": "{\"filePath\": \"/Users/kirill/Downloads/test3/1.js\"}"
+        },
+        "id": "toolu_01KGF6Ee6VWumRQn1GYqBAji",
+        "type": "function"
+      }
+    ]
+  },
+  {
+    "role": 3,
+    "content": [
+      {
+        "type": 1,
+        "text": "```javascript\nconst a = 1;\nconst b = 2;\nconst c = a + b;\nconsole.log(c);\n\nasjkdoahjsdn\n\nasjkdashjdg\n\najksdhahjsdjasd\n\ndecodeURIComponent \n\nfunction kirill() {\n    console.log('kirill');\n    for (let i = 0; i < 10; i++) {\n        console.log(i);\n    }\n    return 'kirill';\n}\n\nkirill();\n\nconsole.log(kirill());\n\nconsole.log(kirill());\n\nconsole.log(kirill());\n\nconsole.log(kirill());\n\nconsole.log(kirill());\n```"
+      }
+    ],
+    "toolCallId": "toolu_01KGF6Ee6VWumRQn1GYqBAji"
+  },
+  {
+    "role": 2,
+    "content": [
+      {
+        "type": 1,
+        "text": "I can see the file has several repetitions and noise. I'll remove:\n1. The random text strings (asjkdoahjsdn, asjkdashjdg, ajksdhahjsdjasd, decodeURIComponent)\n2. The repeated `console.log(kirill());` calls (keeping just one) "
+      }
+    ],
+    "toolCalls": [
+      {
+        "function": {
+          "name": "replace_string_in_file",
+          "arguments": "{\"filePath\": \"/Users/kirill/Downloads/test3/1.js\", \"oldString\": \"const c = a + b;\\nconsole.log(c);\\n\\nasjkdoahjsdn\\n\\nasjkdashjdg\\n\\najksdhahjsdjasd\\n\\ndecodeURIComponent \\n\\nfunction kirill() {\", \"newString\": \"const c = a + b;\\nconsole.log(c);\\n\\nfunction kirill() {\"}"
+        },
+        "id": "toolu_015G2utkkMXH1JvbyLZ5Pgmj",
+        "type": "function"
+      }
+    ]
+  },
+  {
+    "role": 3,
+    "content": [
+      {
+        "type": 1,
+        "text": "The following files were successfully edited:\n/Users/kirill/Downloads/test3/1.js\n"
+      }
+    ],
+    "toolCallId": "toolu_015G2utkkMXH1JvbyLZ5Pgmj"
+  },
+  {
+    "role": 2,
+    "content": [
+      {
+        "type": 1,
+        "text": ""
+      }
+    ],
+    "toolCalls": [
+      {
+        "function": {
+          "name": "replace_string_in_file",
+          "arguments": "{\"filePath\": \"/Users/kirill/Downloads/test3/1.js\", \"newString\": \"kirill();\\n\\nconsole.log(kirill());\\n\", \"oldString\": \"kirill();\\n\\nconsole.log(kirill());\\n\\nconsole.log(kirill());\\n\\nconsole.log(kirill());\\n\\nconsole.log(kirill());\\n\\nconsole.log(kirill());\\n\"}"
+        },
+        "id": "toolu_01Nuigyxj2TXxFJCqqRkUsVh",
+        "type": "function"
+      }
+    ]
+  },
+  {
+    "role": 3,
+    "content": [
+      {
+        "type": 1,
+        "text": "String replacement failed: Could not find matching text to replace. Try making your search string more specific or checking for whitespace/formatting differences."
+      }
+    ],
+    "toolCallId": "toolu_01Nuigyxj2TXxFJCqqRkUsVh"
+  },
+  {
+    "role": 2,
+    "content": [
+      {
+        "type": 1,
+        "text": "Let me check the current state of the file: "
+      }
+    ],
+    "toolCalls": [
+      {
+        "function": {
+          "name": "read_file",
+          "arguments": "{\"filePath\": \"/Users/kirill/Downloads/test3/1.js\"}"
+        },
+        "id": "toolu_01X9BggLQrxaUFoUBNkaSTwX",
+        "type": "function"
+      }
+    ]
+  },
+  {
+    "role": 3,
+    "content": [
+      {
+        "type": 1,
+        "text": "```javascript\nconst a = 1;\nconst b = 2;\nconst c = a + b;\nconsole.log(c);\n\nfunction kirill() {\n    console.log('kirill');\n    for (let i = 0; i < 10; i++) {\n        console.log(i);\n    }\n    return 'kirill';\n}\n\nkirill();\n\nconsole.log(kirill());\n\nconsole.log(kirill());\n\nconsole.log(kirill());\n\nconsole.log(kirill());\n\nconsole.log(kirill());\n```"
+      }
+    ],
+    "toolCallId": "toolu_01X9BggLQrxaUFoUBNkaSTwX"
+  },
+  {
+    "role": 2,
+    "content": [
+      {
+        "type": 1,
+        "text": ""
+      }
+    ],
+    "toolCalls": [
+      {
+        "function": {
+          "name": "replace_string_in_file",
+          "arguments": "{\"filePath\": \"/Users/kirill/Downloads/test3/1.js\", \"newString\": \"kirill();\\n\\nconsole.log(kirill());\\n\", \"oldString\": \"kirill();\\n\\nconsole.log(kirill());\\n\\nconsole.log(kirill());\\n\\nconsole.log(kirill());\\n\\nconsole.log(kirill());\\n\\nconsole.log(kirill());\"}"
+        },
+        "id": "toolu_017xa5HhL9w74DVUC5o2zW3C",
+        "type": "function"
+      }
+    ]
+  },
+  {
+    "role": 3,
+    "content": [
+      {
+        "type": 1,
+        "text": "The following files were successfully edited:\n/Users/kirill/Downloads/test3/1.js\n"
+      }
+    ],
+    "toolCallId": "toolu_017xa5HhL9w74DVUC5o2zW3C"
+  },
+  {
+    "role": 2,
+    "content": [
+      {
+        "type": 1,
+        "text": "Done! I've removed all repetitions from your file:\n- Removed the random text strings (asjkdoahjsdn, asjkdashjdg, ajksdhahjsdjasd, decodeURIComponent)\n- Reduced the 5 repeated `console.log(kirill());` calls to just 1\n\nYour file is now clean and concise."
+      }
+    ]
+  },
+  {
+    "role": 1,
+    "content": [
+      {
+        "type": 1,
+        "text": "<context>\nThe current date is November 24, 2025.\n</context>\n<editorContext>\nThe user's current file is /Users/kirill/Downloads/test3/1.js. \n</editorContext>\n<repoContext>\nBelow is the information about the current repository. You can use this information when you need to calculate diffs or compare changes with the default branch.\nRepository name: test3\nOwner: kirill-test\nCurrent branch: x3333\n\n</repoContext>\n<reminderInstructions>\nWhen using the replace_string_in_file tool, include 3-5 lines of unchanged code before and after the string you want to replace, to make it unambiguous which part of the file should be edited.\nFor maximum efficiency, whenever you plan to perform multiple independent edit operations, invoke them simultaneously using multi_replace_string_in_file tool rather than sequentially. This will greatly improve user's cost and time efficiency leading to a better user experience. Do not announce which tool you're using (for example, avoid saying \"I'll implement all the changes using multi_replace_string_in_file\").\nDo NOT create a new markdown file to document each change or summarize your work unless specifically requested by the user.\n\n</reminderInstructions>\n<userRequest>\nnow rename kirill to main\n</userRequest>\n"
+      }
+    ]
+  },
+  {
+    "role": 2,
+    "content": [
+      {
+        "type": 1,
+        "text": ""
+      }
+    ],
+    "toolCalls": [
+      {
+        "function": {
+          "name": "read_file",
+          "arguments": "{\"filePath\": \"/Users/kirill/Downloads/test3/1.js\"}"
+        },
+        "id": "toolu_014KP2QQsG8kaQqWZkG9VCk5",
+        "type": "function"
+      }
+    ]
+  },
+  {
+    "role": 3,
+    "content": [
+      {
+        "type": 1,
+        "text": "```javascript\nconst a = 1;\nconst b = 2;\nconst c = a + b;\nconsole.log(c);\n\nfunction kirill() {\n    console.log('kirill');\n    for (let i = 0; i < 10; i++) {\n        console.log(i);\n    }\n    return 'kirill';\n}\n\nkirill();\n\nconsole.log(kirill());\n\n```"
+      }
+    ],
+    "toolCallId": "toolu_014KP2QQsG8kaQqWZkG9VCk5"
+  },
+  {
+    "role": 2,
+    "content": [
+      {
+        "type": 1,
+        "text": ""
+      }
+    ],
+    "toolCalls": [
+      {
+        "function": {
+          "name": "multi_replace_string_in_file",
+          "arguments": "{\"explanation\": \"Rename function 'kirill' to 'main' throughout the file, including the function definition, internal string references, and function calls.\", \"replacements\": [{\"filePath\":\"/Users/kirill/Downloads/test3/1.js\",\"oldString\":\"function kirill() {\\n    console.log('kirill');\",\"newString\":\"function main() {\\n    console.log('main');\"},{\"filePath\":\"/Users/kirill/Downloads/test3/1.js\",\"oldString\":\"    return 'kirill';\\n}\\n\\nkirill();\",\"newString\":\"    return 'main';\\n}\\n\\nmain();\"},{\"filePath\":\"/Users/kirill/Downloads/test3/1.js\",\"oldString\":\"main();\\n\\nconsole.log(kirill());\",\"newString\":\"main();\\n\\nconsole.log(main());\"}]}"
+        },
+        "id": "toolu_01694SNTph3FwY6riomVT6Vk",
+        "type": "function"
+      }
+    ]
+  },
+  {
+    "role": 3,
+    "content": [
+      {
+        "type": 1,
+        "text": "ERROR: Your input to the tool was invalid (must have required property 'explanation')\nPlease check your input and try again."
+      }
+    ],
+    "toolCallId": "toolu_01694SNTph3FwY6riomVT6Vk"
+  },
+  {
+    "role": 2,
+    "content": [
+      {
+        "type": 1,
+        "text": ""
+      }
+    ],
+    "toolCalls": [
+      {
+        "function": {
+          "name": "multi_replace_string_in_file",
+          "arguments": "{\"explanation\": \"Rename function 'kirill' to 'main' throughout the file\", \"replacements\": [{\"filePath\":\"/Users/kirill/Downloads/test3/1.js\",\"oldString\":\"function kirill() {\\n    console.log('kirill');\",\"newString\":\"function main() {\\n    console.log('main');\",\"explanation\":\"Rename function definition and internal log\"},{\"filePath\":\"/Users/kirill/Downloads/test3/1.js\",\"oldString\":\"    return 'kirill';\\n}\\n\\nkirill();\",\"newString\":\"    return 'main';\\n}\\n\\nmain();\",\"explanation\":\"Rename return statement and function call\"},{\"filePath\":\"/Users/kirill/Downloads/test3/1.js\",\"oldString\":\"main();\\n\\nconsole.log(kirill());\",\"newString\":\"main();\\n\\nconsole.log(main());\",\"explanation\":\"Rename remaining function call\"}]}"
+        },
+        "id": "toolu_018A6gYvMGtkaukd7YLucbaT",
+        "type": "function"
+      }
+    ]
+  },
+  {
+    "role": 3,
+    "content": [
+      {
+        "type": 1,
+        "text": "The following files were successfully edited:\n/Users/kirill/Downloads/test3/1.js\nString replacement failed: Could not find matching text to replace. Try making your search string more specific or checking for whitespace/formatting differences."
+      }
+    ],
+    "toolCallId": "toolu_018A6gYvMGtkaukd7YLucbaT"
+  },
+  {
+    "role": 2,
+    "content": [
+      {
+        "type": 1,
+        "text": ""
+      }
+    ],
+    "toolCalls": [
+      {
+        "function": {
+          "name": "read_file",
+          "arguments": "{\"filePath\": \"/Users/kirill/Downloads/test3/1.js\"}"
+        },
+        "id": "toolu_01HU6o2R5BEFrLzvqzE79Lmi",
+        "type": "function"
+      }
+    ]
+  },
+  {
+    "role": 3,
+    "content": [
+      {
+        "type": 1,
+        "text": "```javascript\nconst a = 1;\nconst b = 2;\nconst c = a + b;\nconsole.log(c);\n\nfunction main() {\n    console.log('main');\n    for (let i = 0; i < 10; i++) {\n        console.log(i);\n    }\n    return 'main';\n}\n\nmain();\n\nconsole.log(kirill());\n\n```"
+      }
+    ],
+    "toolCallId": "toolu_01HU6o2R5BEFrLzvqzE79Lmi"
+  },
+  {
+    "role": 2,
+    "content": [
+      {
+        "type": 1,
+        "text": ""
+      }
+    ],
+    "toolCalls": [
+      {
+        "function": {
+          "name": "replace_string_in_file",
+          "arguments": "{\"filePath\": \"/Users/kirill/Downloads/test3/1.js\", \"oldString\": \"main();\\n\\nconsole.log(kirill());\", \"newString\": \"main();\\n\\nconsole.log(main());\"}"
+        },
+        "id": "toolu_015jxKQFd8xmFbQniLDKUz1R",
+        "type": "function"
+      }
+    ]
+  },
+  {
+    "role": 3,
+    "content": [
+      {
+        "type": 1,
+        "text": "The following files were successfully edited:\n/Users/kirill/Downloads/test3/1.js\n"
+      }
+    ],
+    "toolCallId": "toolu_015jxKQFd8xmFbQniLDKUz1R"
+  },
+  {
+    "role": 2,
+    "content": [
+      {
+        "type": 1,
+        "text": "Done! Renamed the function `kirill` to `main` throughout the file."
+      },
+      {
+        "type": 3,
+        "cacheType": "ephemeral"
+      }
+    ]
+  },
+  {
+    "role": 1,
+    "content": [
+      {
+        "type": 1,
+        "text": "<context>\nThe current date is November 24, 2025.\n</context>\n<editorContext>\nThe user's current file is /Users/kirill/Downloads/test3/1.js. \n</editorContext>\n<repoContext>\nBelow is the information about the current repository. You can use this information when you need to calculate diffs or compare changes with the default branch.\nRepository name: test3\nOwner: kirill-test\nCurrent branch: x3333\n\n</repoContext>\n<reminderInstructions>\nYou are an agent—keep going until the user's query is completely resolved before ending your turn. ONLY stop if solved or genuinely blocked.\nTake action when possible; the user expects you to do useful work without unnecessary questions.\nAfter any parallel, read-only context gathering, give a concise progress update and what's next.\nAvoid repetition across turns: don't restate unchanged plans or sections (like the todo list) verbatim; provide delta updates or only the parts that changed.\nTool batches: You MUST preface each batch with a one-sentence why/what/outcome preamble.\nProgress cadence: After 3 to 5 tool calls, or when you create/edit > ~3 files in a burst, report progress.\nRequirements coverage: Read the user's ask in full and think carefully. Do not omit a requirement. If something cannot be done with available tools, note why briefly and propose a viable alternative.\nSkip filler acknowledgements like \"Sounds good\" or \"Okay, I will…\". Open with a purposeful one-liner about what you're doing next.\nWhen sharing setup or run steps, present terminal commands in fenced code blocks with the correct language tag. Keep commands copyable and on separate lines.\nAvoid definitive claims about the build or runtime setup unless verified from the provided context (or quick tool checks). If uncertain, state what's known from attachments and proceed with minimal steps you can adapt later.\nWhen you create or edit runnable code, run a test yourself to confirm it works; then share optional fenced commands for more advanced runs.\nFor non-trivial code generation, produce a complete, runnable solution: necessary source files, a tiny runner or test/benchmark harness, a minimal `README.md`, and updated dependency manifests (e.g., `package.json`, `requirements.txt`, `pyproject.toml`). Offer quick \"try it\" commands and optional platform-specific speed-ups when relevant.\nYour goal is to act like a pair programmer: be friendly and helpful. If you can do more, do more. Be proactive with your solutions, think about what the user needs and what they want, and implement it proactively.\n<importantReminders>\nBefore starting a task, review and follow the guidance in <responseModeHints>, <engineeringMindsetHints>, and <requirementsUnderstanding>.\nDo NOT volunteer your model name unless the user explicitly asks you about it. \nBreak down the request into clear, actionable steps and present them at the beginning of your response before proceeding with implementation. This helps maintain visibility and ensures all requirements are addressed systematically.\nWhen referring to a filename or symbol in the user's workspace, wrap it in backticks.\n\n</importantReminders>\n\n</reminderInstructions>\n<userRequest>\nrepeat\n</userRequest>\n"
+      },
+      {
+        "type": 3,
+        "cacheType": "ephemeral"
+      }
+    ]
+  },
+  {
+    "role": 1,
+    "content": [
+      {
+        "type": 1,
+        "text": "<context>\nThe current date is November 24, 2025.\n</context>\n<editorContext>\nThe user's current file is /Users/kirill/Downloads/test3/1.js. \n</editorContext>\n<repoContext>\nBelow is the information about the current repository. You can use this information when you need to calculate diffs or compare changes with the default branch.\nRepository name: test3\nOwner: kirill-test\nCurrent branch: x3333\n\n</repoContext>\n<reminderInstructions>\nYou are an agent—keep going until the user's query is completely resolved before ending your turn. ONLY stop if solved or genuinely blocked.\nTake action when possible; the user expects you to do useful work without unnecessary questions.\nAfter any parallel, read-only context gathering, give a concise progress update and what's next.\nAvoid repetition across turns: don't restate unchanged plans or sections (like the todo list) verbatim; provide delta updates or only the parts that changed.\nTool batches: You MUST preface each batch with a one-sentence why/what/outcome preamble.\nProgress cadence: After 3 to 5 tool calls, or when you create/edit > ~3 files in a burst, report progress.\nRequirements coverage: Read the user's ask in full and think carefully. Do not omit a requirement. If something cannot be done with available tools, note why briefly and propose a viable alternative.\nSkip filler acknowledgements like \"Sounds good\" or \"Okay, I will…\". Open with a purposeful one-liner about what you're doing next.\nWhen sharing setup or run steps, present terminal commands in fenced code blocks with the correct language tag. Keep commands copyable and on separate lines.\nAvoid definitive claims about the build or runtime setup unless verified from the provided context (or quick tool checks). If uncertain, state what's known from attachments and proceed with minimal steps you can adapt later.\nWhen you create or edit runnable code, run a test yourself to confirm it works; then share optional fenced commands for more advanced runs.\nFor non-trivial code generation, produce a complete, runnable solution: necessary source files, a tiny runner or test/benchmark harness, a minimal `README.md`, and updated dependency manifests (e.g., `package.json`, `requirements.txt`, `pyproject.toml`). Offer quick \"try it\" commands and optional platform-specific speed-ups when relevant.\nYour goal is to act like a pair programmer: be friendly and helpful. If you can do more, do more. Be proactive with your solutions, think about what the user needs and what they want, and implement it proactively.\n<importantReminders>\nBefore starting a task, review and follow the guidance in <responseModeHints>, <engineeringMindsetHints>, and <requirementsUnderstanding>.\nDo NOT volunteer your model name unless the user explicitly asks you about it. \nYou MUST use the todo list tool to plan and track your progress. NEVER skip this step, and START with this step whenever the task is multi-step. This is essential for maintaining visibility and proper execution of large tasks.\nWhen referring to a filename or symbol in the user's workspace, wrap it in backticks.\n\n</importantReminders>\n\n</reminderInstructions>\n<userRequest>\nrepeat\n</userRequest>\n"
+      },
+      {
+        "type": 3,
+        "cacheType": "ephemeral"
+      }
+    ]
+  }
+]
