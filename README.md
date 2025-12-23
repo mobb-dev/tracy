@@ -2,6 +2,10 @@
 
 VS Code/Cursor extension that monitors and tracks AI-assisted coding activities.
 
+## Documentation
+
+For detailed information and setup instructions, visit: [Mobb Tracy Documentation](https://docs.mobb.ai/mobb-user-docs/getting-started/mobb-tracy)
+
 ## What it does
 
 - **Cursor**: Polls the Cursor database to capture AI conversations, tool calls, and code changes.
