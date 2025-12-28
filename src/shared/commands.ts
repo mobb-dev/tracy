@@ -1,8 +1,9 @@
 import * as vscode from 'vscode'
 
+import { EXTENSION_NAME } from '../env'
 import { logger } from '../shared/logger'
 import { MonitorManager } from '../shared/MonitorManager'
-import { AppType } from './IMonitor'
+import { AppType } from './repositoryInfo'
 
 export function registerMonitorCommands(
   context: vscode.ExtensionContext,
@@ -10,7 +11,7 @@ export function registerMonitorCommands(
 ) {
   // Command to check monitor status
   const statusCommand = vscode.commands.registerCommand(
-    'autofixer.monitor.status',
+    `${EXTENSION_NAME}.monitor.status`,
     () => {
       const appType = monitorManager.getAppType()
       const runningMonitors = monitorManager.getRunningMonitors()
@@ -29,7 +30,7 @@ Running Monitors: ${runningMonitors.map((m) => m.name).join(', ') || 'None'}
 
   // Command to restart monitoring
   const restartCommand = vscode.commands.registerCommand(
-    'autofixer.monitor.restart',
+    `${EXTENSION_NAME}.monitor.restart`,
     async () => {
       try {
         await monitorManager.stopAllMonitors()
@@ -44,7 +45,7 @@ Running Monitors: ${runningMonitors.map((m) => m.name).join(', ') || 'None'}
 
   // Debug command to force start specific monitor (for testing)
   const forceStartCommand = vscode.commands.registerCommand(
-    'autofixer.monitor.forceStart',
+    `${EXTENSION_NAME}.monitor.forceStart`,
     async () => {
       const options = Object.values(AppType).map((type) => ({
         label: type,

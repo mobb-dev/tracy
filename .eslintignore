@@ -5,3 +5,4 @@ coverage
 .vscode-test
 mobbdev_src
 .eslintrc.js
+scripts

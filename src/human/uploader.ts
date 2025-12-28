@@ -4,8 +4,8 @@ import {
   type UploadAiBlameResult,
 } from '../mobbdev_src/args/commands/upload_ai_blame'
 import { AiBlameInferenceType } from '../mobbdev_src/features/analysis/scm/generates/client_generates'
-import { AppType } from '../shared/IMonitor'
 import { logger } from '../shared/logger'
+import { AppType } from '../shared/repositoryInfo'
 import {
   type SegmentClassificationCode,
   TOOL_NAME_HUMAN_TYPING,

@@ -4,29 +4,17 @@ import { CopilotMonitor } from '../copilot/CopilotMonitor'
 import { CursorMonitor } from '../cursor/CursorMonitor'
 import { CursorTabMonitor } from '../cursor_tab/CursorTabMonitor'
 import { HumanTrackingSession } from '../human/HumanMonitor'
-import { AppType, IMonitor } from './IMonitor'
+import { IMonitor } from './IMonitor'
 import { logger } from './logger'
+import { AppType, detectAppType } from './repositoryInfo'
 
 export class MonitorManager {
   private monitors = new Map<AppType, IMonitor[]>()
   private currentAppType: AppType
 
   constructor(private context: vscode.ExtensionContext) {
-    this.currentAppType = this.detectAppType()
+    this.currentAppType = detectAppType()
     this.initializeMonitors()
-  }
-
-  private detectAppType(): AppType {
-    const appName = vscode.env.appName.toLowerCase()
-    logger.info(`App Name: ${appName}`)
-
-    if (appName.includes('visual studio code')) {
-      return AppType.VSCODE
-    } else if (appName.includes('cursor')) {
-      return AppType.CURSOR
-    }
-    logger.warn(`Unknown app: ${appName}`)
-    return AppType.UNKNOWN
   }
 
   private initializeMonitors(): void {

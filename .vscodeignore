@@ -12,6 +12,8 @@ __tests__/**
 .vscode/**
 mobb-ai-tracer-*.vsix
 package.sh
+package-dev.sh
+scripts/**
 precommit-format.sh
 src/**
 tsconfig.eslint.json
@@ -19,6 +21,7 @@ tsconfig.json
 vitest.config.ts
 .env.*
 package.json.bak
+package-lock.json.bak
 package.json.tmp
 icon.svg
 documentation/**

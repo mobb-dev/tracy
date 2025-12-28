@@ -2,8 +2,9 @@ import { setTimeout } from 'node:timers/promises'
 
 import * as vscode from 'vscode'
 
-import { AppType, BaseMonitor } from '../shared/IMonitor'
+import { BaseMonitor } from '../shared/IMonitor'
 import { logger } from '../shared/logger'
+import { AppType } from '../shared/repositoryInfo'
 import { startupTimestamp } from '../shared/startupTimestamp'
 import { uploadCursorChanges } from '../shared/uploader'
 import { getRowsByLike } from './db'

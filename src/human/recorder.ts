@@ -1,8 +1,8 @@
 import * as path from 'path'
 import * as vscode from 'vscode'
 
-import { AppType } from '../shared/IMonitor'
 import { logger } from '../shared/logger'
+import { AppType } from '../shared/repositoryInfo'
 import { Segment } from './segmenter'
 import { SegmentClassificationCode } from './types'
 import type { HumanSegmentUpload } from './uploader'

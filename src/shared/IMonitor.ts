@@ -1,8 +1,4 @@
-export enum AppType {
-  CURSOR = 'cursor',
-  VSCODE = 'vscode',
-  UNKNOWN = 'unknown',
-}
+import { AppType } from './repositoryInfo'
 
 export type IMonitor = {
   start(): Promise<void>

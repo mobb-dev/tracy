@@ -8,12 +8,25 @@ import {
   loadConfigurationToEnv,
 } from './shared/configLoader'
 import { dailyMcpDetection } from './shared/DailyMcpDetection'
-import { AppType } from './shared/IMonitor'
 import { initLogger, logger } from './shared/logger'
 import { MonitorManager } from './shared/MonitorManager'
+import {
+  AppType,
+  getRepositoryInfo,
+  RepositoryInfo,
+} from './shared/repositoryInfo'
 import { getAuthenticatedForUpload } from './shared/uploader'
+import { AIBlameCache } from './ui/AIBlameCache'
+import { GitBlameCache } from './ui/GitBlameCache'
+import { TraceyController } from './ui/TraceyController'
+import { StatusBarView } from './ui/TraceyStatusBar'
 
 let monitorManager: MonitorManager | null = null
+let repoInfo: RepositoryInfo | null = null
+let aiBlameCache: AIBlameCache | null = null
+let gitBlameCache: GitBlameCache | null = null
+let traceyController: TraceyController | null = null
+let statusBarItem: vscode.StatusBarItem | null = null
 
 export async function activate(context: vscode.ExtensionContext) {
   // Load VS Code configuration to environment variables FIRST
@@ -25,6 +38,9 @@ export async function activate(context: vscode.ExtensionContext) {
   await getAuthenticatedForUpload()
 
   try {
+    repoInfo = await getRepositoryInfo()
+    setupView(context)
+
     dailyMcpDetection.start()
 
     monitorManager = new MonitorManager(context)
@@ -73,6 +89,32 @@ export async function activate(context: vscode.ExtensionContext) {
     logger.error({ err }, 'Failed to activate extension')
     throw err
   }
+}
+
+function setupView(context: vscode.ExtensionContext): void {
+  if (!repoInfo || !repoInfo.organizationId || !repoInfo.gitRepoUrl) {
+    logger.error('Repository info is not available for view setup')
+    return
+  }
+  aiBlameCache = new AIBlameCache(repoInfo.gitRepoUrl, repoInfo.organizationId)
+  gitBlameCache = new GitBlameCache(
+    repoInfo.gitRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ''
+  )
+  statusBarItem = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Right
+  )
+  traceyController = new TraceyController(
+    gitBlameCache,
+    aiBlameCache,
+    new StatusBarView(statusBarItem),
+    repoInfo?.gitRepoUrl ?? ''
+  )
+
+  // Register disposables for cleanup
+  context.subscriptions.push(statusBarItem)
+  context.subscriptions.push({ dispose: () => traceyController?.dispose() })
+  context.subscriptions.push({ dispose: () => aiBlameCache?.dispose() })
+  context.subscriptions.push({ dispose: () => gitBlameCache?.dispose() })
 }
 
 export async function deactivate(): Promise<void> {

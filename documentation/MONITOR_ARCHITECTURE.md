@@ -84,10 +84,12 @@ await monitorManager.forceStartMonitor(AppType.CURSOR)
 ```
 
 ### Commands
-Optional VS Code commands for debugging:
-- `autofixer.monitor.status` - Check monitor status
-- `autofixer.monitor.restart` - Restart monitoring
-- `autofixer.monitor.forceStart` - Force start specific monitor
+Optional VS Code commands for debugging (prefix matches extension name):
+- `mobb-ai-tracer.monitor.status` - Check monitor status (prod)
+- `mobb-ai-tracer.monitor.restart` - Restart monitoring (prod)
+- `mobb-ai-tracer.monitor.forceStart` - Force start specific monitor (prod)
+
+For dev builds, replace `mobb-ai-tracer` with `mobb-ai-tracer-dev`.
 
 ## Migration from Old Code
 

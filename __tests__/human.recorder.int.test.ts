@@ -4,7 +4,7 @@ import { HumanRecorder } from '../src/human/recorder'
 import type { Segment } from '../src/human/segmenter'
 import { SegmentClassification } from '../src/human/types'
 import { uploadAiBlameHandlerFromExtension } from '../src/mobbdev_src/args/commands/upload_ai_blame'
-import { AppType } from '../src/shared/IMonitor'
+import { AppType } from '../src/shared/repositoryInfo'
 
 // Hoisted containers to satisfy Vitest mock hoisting
 const h = vi.hoisted(() => {

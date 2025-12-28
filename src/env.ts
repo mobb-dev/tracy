@@ -23,8 +23,15 @@ const env = zodSchema.parse(process.env)
 
 export const { DD_RUM_TOKEN } = env
 
-const packageJson = JSON.parse(
-  fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')
+const packageJsonSchema = z.object({
+  name: z.string().min(1),
+  version: z.string().min(1),
+})
+
+const packageJson = packageJsonSchema.parse(
+  JSON.parse(
+    fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')
+  )
 )
 
 export const { version: EXTENSION_VERSION, name: EXTENSION_NAME } = packageJson

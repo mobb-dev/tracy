@@ -5,8 +5,9 @@ import { join } from 'node:path'
 import * as vscode from 'vscode'
 
 import { AiBlameInferenceType } from '../mobbdev_src/features/analysis/scm/generates/client_generates'
-import { AppType, BaseMonitor } from '../shared/IMonitor'
+import { BaseMonitor } from '../shared/IMonitor'
 import { logger } from '../shared/logger'
+import { AppType } from '../shared/repositoryInfo'
 import { uploadCursorChanges } from '../shared/uploader'
 
 export class CursorTabMonitor extends BaseMonitor {

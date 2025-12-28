@@ -1,7 +1,8 @@
 import * as vscode from 'vscode'
 
-import { AppType, BaseMonitor } from '../shared/IMonitor'
+import { BaseMonitor } from '../shared/IMonitor'
 import { logger } from '../shared/logger'
+import { AppType } from '../shared/repositoryInfo'
 import { HUMAN_TRACKING_CONFIG } from './config'
 import { detectEventClassification } from './eventClassifier'
 import { HumanRecorder } from './recorder'
