@@ -1,7 +1,7 @@
 {
   "name": "mobb-ai-tracer",
   "displayName": "Mobb AI Tracer",
-  "version": "0.2.17",
+  "version": "0.2.18",
   "repository": "https://github.com/mobb-dev/tracy",
   "publisher": "Mobb",
   "icon": "icon.png",
@@ -32,7 +32,7 @@
   },
   "scripts": {
     "pull-env": "dotenv-vault pull",
-    "compile": "npm run pull-env && tsc -p .",
+    "compile": "npm run pull-env && npm run build",
     "build": "tsc -p .",
     "watch": "tsc -p . -w",
     "lint": "eslint --cache --max-warnings 0 --ignore-path .eslintignore --ext .js,.ts,.tsx,.jsx .",

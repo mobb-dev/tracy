@@ -27,3 +27,7 @@ Install from VSIX package or build from source.
 
 - VS Code 1.99.0+ or Cursor
 - Node.js 22.x
+
+## Debugging
+
+See [DEBUGGING.md](./DEBUGGING.md) for debugging setup and instructions.
