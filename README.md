@@ -1,4 +1,4 @@
-# Mobb AI Tracer
+# Mobb Tracy
 
 VS Code/Cursor extension that monitors and tracks AI-assisted coding activities.
 

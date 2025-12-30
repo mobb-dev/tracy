@@ -1,7 +1,7 @@
 {
   "name": "mobb-ai-tracer",
-  "displayName": "Mobb AI Tracer",
-  "version": "0.2.18",
+  "displayName": "Mobb Tracy",
+  "version": "0.2.19",
   "repository": "https://github.com/mobb-dev/tracy",
   "publisher": "Mobb",
   "icon": "icon.png",
@@ -15,7 +15,7 @@
   "main": "./out/extension.js",
   "contributes": {
     "configuration": {
-      "title": "Mobb AI Tracer",
+      "title": "Mobb Tracy",
       "properties": {
         "mobbAiTracer.apiUrl": {
           "type": "string",
