@@ -4,6 +4,15 @@ import { defineConfig } from 'vitest/config'
 
 const require = createRequire(import.meta.url)
 const debugEntry = require.resolve('debug')
+const dotenvEntry = require.resolve('dotenv')
+const httpsProxyAgentEntry = require.resolve('https-proxy-agent')
+const httpProxyAgentEntry = require.resolve('http-proxy-agent')
+const nanospinnerEntry = require.resolve('nanospinner')
+const semverEntry = require.resolve('semver')
+const azureDevopsNodeApiEntry = require.resolve('azure-devops-node-api')
+const bitbucketEntry = require.resolve('bitbucket/lib/index.js')
+const undiciEntry = require.resolve('undici')
+const admZipEntry = require.resolve('adm-zip')
 
 export default defineConfig({
   resolve: {
@@ -12,11 +21,21 @@ export default defineConfig({
     // correct directory.
     alias: {
       debug: debugEntry,
+      dotenv: dotenvEntry,
+      'https-proxy-agent': httpsProxyAgentEntry,
+      'http-proxy-agent': httpProxyAgentEntry,
+      nanospinner: nanospinnerEntry,
+      semver: semverEntry,
+      'azure-devops-node-api': azureDevopsNodeApiEntry,
+      bitbucket: bitbucketEntry,
+      undici: undiciEntry,
+      'adm-zip': admZipEntry,
     },
   },
   test: {
     environment: 'node',
     include: ['__tests__/**/*.test.ts'],
+    setupFiles: ['__tests__/setupEnv.ts', '__tests__/setupMocks.ts'],
     reporters: ['default'],
     deps: {
       // Vitest's SSR deps optimizer can break CJS packages that rely on

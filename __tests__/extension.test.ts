@@ -67,6 +67,11 @@ const createMockGQLClient = () => ({
   validateUserToken: vi.fn(async () => 'test-user'),
 })
 
+// Mock getAuthenticatedGQLClient directly (used by extension activation/upload path)
+vi.mock('../src/mobbdev_src/commands/handleMobbLogin', () => ({
+  getAuthenticatedGQLClient: vi.fn(async () => createMockGQLClient()),
+}))
+
 // Mock GQLClient
 vi.mock('../src/mobbdev_src/features/analysis/graphql', () => ({
   GQLClient: vi.fn().mockImplementation(() => createMockGQLClient()),
@@ -115,8 +120,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  getRowsByLikeSpy.mockRestore()
-  vi.restoreAllMocks()
+  vi.clearAllMocks()
 })
 
 describe('extension tests', () => {

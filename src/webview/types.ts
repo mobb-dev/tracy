@@ -10,4 +10,8 @@ export type InfoPanelData = {
   attribution: AIBlameAttribution | null
   repoUrl?: string
   conversation: Array<{ type: string; text: string; date: string }>
+  conversationState: 'IDLE' | 'LOADING' | 'SUCCESS' | 'ERROR'
+  conversationError?: string
+  blameInfoState: 'IDLE' | 'LOADING' | 'SUCCESS' | 'ERROR'
+  blameInfoError?: string
 }

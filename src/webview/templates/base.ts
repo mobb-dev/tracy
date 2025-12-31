@@ -137,6 +137,58 @@ export const baseLayout = (
           word-wrap: break-word;
           white-space: pre-wrap;
         }
+        .conversation-loading {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 32px;
+          background-color: var(--vscode-input-background);
+          border: 1px solid var(--vscode-textSeparator-foreground);
+          border-radius: 8px;
+          gap: 12px;
+        }
+        .conversation-error {
+          text-align: center;
+          padding: 32px;
+          background-color: var(--vscode-inputValidation-errorBackground);
+          border: 1px solid var(--vscode-inputValidation-errorBorder);
+          border-radius: 8px;
+          color: var(--vscode-inputValidation-errorForeground);
+        }
+        .blame-info-loading {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 32px;
+          background-color: var(--vscode-input-background);
+          border: 1px solid var(--vscode-textSeparator-foreground);
+          border-radius: 8px;
+          gap: 12px;
+        }
+        .blame-info-error {
+          text-align: center;
+          padding: 32px;
+          background-color: var(--vscode-inputValidation-errorBackground);
+          border: 1px solid var(--vscode-inputValidation-errorBorder);
+          border-radius: 8px;
+          color: var(--vscode-inputValidation-errorForeground);
+        }
+        .spinner {
+          width: 20px;
+          height: 20px;
+          border: 2px solid var(--vscode-textSeparator-foreground);
+          border-top: 2px solid var(--vscode-focusBorder);
+          border-radius: 50%;
+          animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+          0% {
+            transform: rotate(0deg);
+          }
+          100% {
+            transform: rotate(360deg);
+          }
+        }
       </style>
     </head>
     <body>

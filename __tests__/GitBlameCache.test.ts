@@ -15,8 +15,10 @@ vi.mock('../src/shared/logger', () => {
 })
 
 vi.mock('fs', () => ({
-  writeFileSync: vi.fn(),
-  unlinkSync: vi.fn(),
+  promises: {
+    writeFile: vi.fn(),
+    unlink: vi.fn(),
+  },
 }))
 
 vi.mock('os', () => ({
@@ -190,18 +192,18 @@ describe('GitBlameCache', () => {
 
       const cache = new GitBlameCache('/repo')
 
-      queueMicrotask(() => {
+      setTimeout(() => {
         proc.stdout!.emit(
           'data',
           Buffer.from('abc123 1 1 1\nauthor Test Author\n1) line 1\n')
         )
         proc.emit('close', 0)
-      })
+      }, 0)
 
       await cache.getBlame(dirtyDoc)
 
       // Should create temp file with document content
-      expect(fs.writeFileSync).toHaveBeenCalledWith(
+      expect(fs.promises.writeFile).toHaveBeenCalledWith(
         expect.stringMatching(/\/tmp\/gitblamecache_\d+_file\.ts/),
         'const x = 2\n',
         'utf8'
@@ -233,18 +235,18 @@ describe('GitBlameCache', () => {
 
       const cache = new GitBlameCache('/repo')
 
-      queueMicrotask(() => {
+      setTimeout(() => {
         proc.stdout!.emit(
           'data',
           Buffer.from('abc123 1 1 1\nauthor Test Author\n1) line 1\n')
         )
         proc.emit('close', 0)
-      })
+      }, 0)
 
       await cache.getBlame(dirtyDoc)
 
       // Should clean up temp file
-      expect(fs.unlinkSync).toHaveBeenCalledWith(
+      expect(fs.promises.unlink).toHaveBeenCalledWith(
         expect.stringMatching(/\/tmp\/gitblamecache_\d+_file\.ts/)
       )
     })
@@ -267,16 +269,16 @@ describe('GitBlameCache', () => {
 
       const cache = new GitBlameCache('/repo')
 
-      queueMicrotask(() => {
+      setTimeout(() => {
         proc.stderr!.emit('data', Buffer.from('fatal: not a git repository'))
         proc.emit('close', 128)
-      })
+      }, 0)
 
       const result = await cache.getBlame(dirtyDoc)
 
       expect(result).toBeNull()
       // Should still clean up temp file even on failure
-      expect(fs.unlinkSync).toHaveBeenCalled()
+      expect(fs.promises.unlink).toHaveBeenCalled()
     })
   })
 })

@@ -1,5 +1,6 @@
 import escapeHtml from 'escape-html'
 
+import { AppType, detectAppType } from '../../shared/repositoryInfo'
 import { html } from './html'
 
 export function timeAgo(dateStr: string): string {
@@ -41,7 +42,7 @@ export const fileHeader = (
   fileName: string,
   lineNumber: number
 ): string => html`
-  <h2>Tracey AI Information</h2>
+  <h2>Tracy AI Information</h2>
   <div class="file-info">
     <strong>${escapeHtml(fileName)}</strong> &bull; Line ${lineNumber}
   </div>
@@ -60,8 +61,8 @@ export const metaInfo = (
 
   const commitDisplay = commitUrl
     ? html`<span
-        class="meta-item meta-link"
-        onclick="openCommit('${escapeHtml(commitUrl)}')"
+        class="meta-item meta-link commit-link"
+        data-commit-url="${escapeHtml(commitUrl)}"
         >${safeShortSha}</span
       >`
     : html`<span class="meta-item">${safeShortSha}</span>`
@@ -82,7 +83,7 @@ export const conversationMessage = (message: {
 }): string => {
   const isUser = message.type === 'USER_PROMPT'
   const messageClass = isUser ? 'user-message' : 'ai-message'
-  const avatar = isUser ? '' : ''
+  const avatar = ''
   const timestamp = timeAgo(message.date)
   const escapedText = escapeHtml(message.text).replace(/\n/g, '<br>')
 
@@ -97,38 +98,94 @@ export const conversationMessage = (message: {
   `
 }
 
-export const conversationSection = (messages: unknown): string => {
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return ''
+export const conversationSection = (
+  messages: unknown,
+  conversationState: 'IDLE' | 'LOADING' | 'SUCCESS' | 'ERROR',
+  conversationError?: string
+): string => {
+  // Show loading spinner
+  if (conversationState === 'LOADING') {
+    return html` <h3>AI Conversation</h3>
+      <div class="conversation-loading">
+        <div class="spinner"></div>
+        <span>Loading conversation...</span>
+      </div>`
   }
 
-  const normalized = messages
-    .filter((m): m is Record<string, unknown> => typeof m === 'object' && !!m)
-    .map((m) => ({
-      type: typeof m.type === 'string' ? m.type : '',
-      text: typeof m.text === 'string' ? m.text : '',
-      date: typeof m.date === 'string' ? m.date : '',
-    }))
-    .filter((m) => m.text.length > 0)
-
-  if (!normalized.length) {
-    return ''
+  // Show error message
+  if (conversationState === 'ERROR') {
+    const errorMessage = conversationError || 'Failed to load conversation'
+    return html` <h3>AI Conversation</h3>
+      <div class="conversation-error">
+        <span>${escapeHtml(errorMessage)}</span>
+      </div>`
   }
 
-  return html` <h3>AI Conversation</h3>
-    <div class="conversation">
-      ${normalized.map(conversationMessage).join('')}
-    </div>`
+  // Show conversation if we have messages
+  if (Array.isArray(messages) && messages.length > 0) {
+    const normalized = messages
+      .filter((m): m is Record<string, unknown> => typeof m === 'object' && !!m)
+      .map((m) => ({
+        type: typeof m.type === 'string' ? m.type : '',
+        text: typeof m.text === 'string' ? m.text : '',
+        date: typeof m.date === 'string' ? m.date : '',
+      }))
+      .filter((m) => m.text.length > 0)
 
-  // TODO: restore this when we figure out how to make the button work
-  //  <div class="action-buttons">
-  //    <button onclick="continueConversation()">Continue Conversation</button>
-  //  </div>
-  //`
+    if (normalized.length > 0) {
+      const conversationPart = html` <h3>AI Conversation</h3>
+        <div class="conversation">
+          ${normalized.map(conversationMessage).join('')}
+        </div>`
+      const buttonPart = html` <div class="action-buttons">
+        <button id="continue-conversation-btn">Continue Conversation</button>
+      </div>`
+      // The current button action code only works in VSCode. Need to research and implement another mechanism for Cursor
+      const shouldShowContinueButton = detectAppType() === AppType.VSCODE
+      return conversationPart + (shouldShowContinueButton ? buttonPart : '')
+    }
+  }
+
+  // No conversation data available
+  return ''
 }
 
-export const humanInfo = (): string => html`
+export const blameInfoSection = (
+  blameInfoState: 'IDLE' | 'LOADING' | 'SUCCESS' | 'ERROR',
+  blameInfoError?: string
+): string => {
+  // IDLE can occur briefly before the controller sets LOADING (or if the panel
+  // is shown without triggering a request). Returning a non-empty placeholder
+  // prevents the template from falling through to the "human-written" message.
+  if (blameInfoState === 'IDLE') {
+    return html`<div class="blame-info-loading">
+      <div class="spinner"></div>
+      <span>Loading blame information...</span>
+    </div>`
+  }
+
+  // Show loading spinner
+  if (blameInfoState === 'LOADING') {
+    return html`<div class="blame-info-loading">
+      <div class="spinner"></div>
+      <span>Loading blame information...</span>
+    </div>`
+  }
+
+  // Show error message
+  if (blameInfoState === 'ERROR') {
+    const errorMessage = blameInfoError || 'Failed to load blame information'
+    return html`<div class="blame-info-error">
+      <span>${escapeHtml(errorMessage)}</span>
+    </div>`
+  }
+
+  // For SUCCESS or IDLE states, return empty string - content will be handled by caller
+  return ''
+}
+
+export const noAttributeInfo = (): string => html`
   <div class="human-info">
-    <span>Human-written code on this line</span>
+    <span>No attribution information available for this line.</span>
   </div>
 `

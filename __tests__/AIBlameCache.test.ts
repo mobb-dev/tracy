@@ -150,7 +150,9 @@ describe('AIBlameCache', () => {
       }
 
       const mockGqlClient = {
-        analyzeCommitForAIBlame: vi.fn().mockResolvedValue(mockAnalyzeResult),
+        analyzeCommitForExtensionAIBlame: vi
+          .fn()
+          .mockResolvedValue(mockAnalyzeResult),
         getAIBlameInference: vi
           .fn()
           .mockResolvedValue({ ai_blame_inference: [] }),
@@ -178,7 +180,9 @@ describe('AIBlameCache', () => {
       expect(results[1]).toEqual(results[2])
 
       // But GraphQL client should only be called once
-      expect(mockGqlClient.analyzeCommitForAIBlame).toHaveBeenCalledTimes(1)
+      expect(
+        mockGqlClient.analyzeCommitForExtensionAIBlame
+      ).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -199,8 +203,9 @@ describe('AIBlameCache', () => {
       const result = await cache.getAIBlameInfo('abc123')
 
       expect(result).toBeNull()
+      // Note: the error is logged both in the wrapper and in the cache layer.
       expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining('Failed to analyze commit abc123'),
+        expect.stringContaining('AIBlameCache: Error analyzing commit abc123'),
         expect.any(Error)
       )
     })

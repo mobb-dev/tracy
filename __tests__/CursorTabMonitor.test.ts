@@ -1,12 +1,10 @@
-import * as fs from 'node:fs'
-import { join } from 'node:path'
 import { setTimeout } from 'node:timers/promises'
 
-import * as tmp from 'tmp-promise'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as vscode from 'vscode'
 
 import { CursorTabMonitor } from '../src/cursor_tab/CursorTabMonitor'
+import { AppType } from '../src/shared/repositoryInfo'
 import * as uploader from '../src/shared/uploader'
 
 vi.mock('vscode', () => {
@@ -47,42 +45,27 @@ describe('CursorTabMonitor', () => {
   it('should process log entries and upload cursor changes on happy flow', async () => {
     uploadCursorChangesSpy.mockResolvedValue()
 
-    const tempDir = await tmp.dir({
-      unsafeCleanup: true,
-    })
+    const monitor = new CursorTabMonitor(
+      {
+        logPath: '/tmp',
+        subscriptions: [],
+      } as vscode.ExtensionContext,
+      AppType.CURSOR,
+      10
+    )
 
-    try {
-      fs.mkdirSync(join(tempDir.path, 'dummy/'))
-      fs.mkdirSync(join(tempDir.path, 'anysphere.cursor-always-local/'))
-      fs.writeFileSync(
-        join(tempDir.path, 'anysphere.cursor-always-local/Cursor Tab.log'),
-        'bla bla \n+|a\n+|b\n+|c\n'
-      )
+    ;(monitor as any).processLogEntries(
+      '+|this is a long cursor tab completion line 1\n+|this is a long cursor tab completion line 2\n'
+    )
 
-      const monitor = new CursorTabMonitor(
-        {
-          logPath: join(tempDir.path, 'dummy/'),
-          subscriptions: [],
-        } as vscode.ExtensionContext,
-        10
-      )
+    // Upload is scheduled via a Promise chain; allow it to be queued.
+    await setTimeout(0)
 
-      await monitor.start()
+    expect(uploadCursorChangesSpy).toHaveBeenCalledOnce()
 
-      fs.appendFileSync(
-        join(tempDir.path, 'anysphere.cursor-always-local/Cursor Tab.log'),
-        '+|d\n+|e\n+|f\n'
-      )
-
-      // Wait 10x longer than fsWatchInterval.
-      await setTimeout(100)
-
-      expect(uploadCursorChangesSpy).toHaveBeenCalledOnce()
-
-      const change = uploadCursorChangesSpy.mock.calls.at(0).at(0).at(0)
-      expect(change.additions).toBe('d\ne\nf')
-    } finally {
-      await tempDir.cleanup()
-    }
+    const change = uploadCursorChangesSpy.mock.calls.at(0).at(0).at(0)
+    expect(change.additions).toBe(
+      'this is a long cursor tab completion line 1\nthis is a long cursor tab completion line 2'
+    )
   })
 })

@@ -18,14 +18,14 @@ import {
 import { getAuthenticatedForUpload } from './shared/uploader'
 import { AIBlameCache } from './ui/AIBlameCache'
 import { GitBlameCache } from './ui/GitBlameCache'
-import { TraceyController } from './ui/TraceyController'
-import { StatusBarView } from './ui/TraceyStatusBar'
+import { TracyController } from './ui/TracyController'
+import { StatusBarView } from './ui/TracyStatusBar'
 
 let monitorManager: MonitorManager | null = null
 let repoInfo: RepositoryInfo | null = null
 let aiBlameCache: AIBlameCache | null = null
 let gitBlameCache: GitBlameCache | null = null
-let traceyController: TraceyController | null = null
+let tracyController: TracyController | null = null
 let statusBarItem: vscode.StatusBarItem | null = null
 
 export async function activate(context: vscode.ExtensionContext) {
@@ -103,7 +103,7 @@ function setupView(context: vscode.ExtensionContext): void {
   statusBarItem = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right
   )
-  traceyController = new TraceyController(
+  tracyController = new TracyController(
     gitBlameCache,
     aiBlameCache,
     new StatusBarView(statusBarItem),
@@ -112,7 +112,7 @@ function setupView(context: vscode.ExtensionContext): void {
 
   // Register disposables for cleanup
   context.subscriptions.push(statusBarItem)
-  context.subscriptions.push({ dispose: () => traceyController?.dispose() })
+  context.subscriptions.push({ dispose: () => tracyController?.dispose() })
   context.subscriptions.push({ dispose: () => aiBlameCache?.dispose() })
   context.subscriptions.push({ dispose: () => gitBlameCache?.dispose() })
 }

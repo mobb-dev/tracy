@@ -1,7 +1,7 @@
 {
   "name": "mobb-ai-tracer",
   "displayName": "Mobb Tracy",
-  "version": "0.2.19",
+  "version": "0.2.20",
   "repository": "https://github.com/mobb-dev/tracy",
   "publisher": "Mobb",
   "icon": "icon.png",
@@ -38,7 +38,7 @@
     "lint": "eslint --cache --max-warnings 0 --ignore-path .eslintignore --ext .js,.ts,.tsx,.jsx .",
     "lint:fix": "eslint --fix --cache --max-warnings 0 --ignore-path .eslintignore --ext .js,.ts,.tsx,.jsx .",
     "lint:fix:files": "eslint --fix --cache --max-warnings 0 --ignore-path .eslintignore --ext .js,.ts,.tsx,.jsx",
-    "test": "vitest run __tests__/processor.test.ts __tests__/smoke.test.ts && vitest run __tests__/extension.test.ts -t \"without\" && vitest run __tests__/extension.test.ts -t \"with thinking\" && vitest run __tests__/human.segmenter.test.ts __tests__/human.uploader.test.ts __tests__/human.recorder.int.test.ts __tests__/human.format.int.test.ts __tests__/human.eventClassifier.test.ts",
+    "test": "vitest run __tests__/processor.test.ts __tests__/smoke.test.ts && vitest run __tests__/extension.test.ts -t \"without\" && vitest run __tests__/extension.test.ts -t \"with thinking\" && vitest run __tests__/human.segmenter.test.ts __tests__/human.uploader.test.ts __tests__/human.recorder.int.test.ts __tests__/human.format.int.test.ts __tests__/human.eventClassifier.test.ts __tests__/ToolCall.test.ts __tests__/CursorTabMonitor.test.ts __tests__/AIBlameCache.test.ts __tests__/GitBlameCache.test.ts __tests__/TracyController.test.ts __tests__/TracyStatusBar.test.ts __tests__/shared.repositoryInfo.test.ts __tests__/webview.templates.components.test.ts __tests__/TracyInfoPanel.test.ts",
     "test:ci": "vitest run --bail=1",
     "test:watch": "vitest watch",
     "package": "vsce package --allow-package-env-file",

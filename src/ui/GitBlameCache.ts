@@ -1,5 +1,5 @@
 import { spawn } from 'child_process'
-import * as fs from 'fs'
+import { promises as fsPromises } from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import * as vscode from 'vscode'
@@ -74,14 +74,14 @@ export class GitBlameCache {
         tempDir,
         `gitblamecache_${Date.now()}_${path.basename(document.fileName)}`
       )
-      fs.writeFileSync(tempFilePath, document.getText(), 'utf8')
+      await fsPromises.writeFile(tempFilePath, document.getText(), 'utf8')
     }
-    const cleanupTempFile = (): void => {
+    const cleanupTempFile = async (): Promise<void> => {
       if (!tempFilePath) {
         return
       }
       try {
-        fs.unlinkSync(tempFilePath)
+        await fsPromises.unlink(tempFilePath)
       } catch {
         /* ignore */
       } finally {
@@ -175,7 +175,7 @@ export class GitBlameCache {
       )
       return blameInfo
     } finally {
-      cleanupTempFile()
+      await cleanupTempFile()
     }
   }
 
