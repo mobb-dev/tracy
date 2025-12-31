@@ -9,7 +9,7 @@ For detailed information and setup instructions, visit: [Mobb Tracy Documentatio
 ## What it does
 
 - **Cursor**: Polls the Cursor database to capture AI conversations, tool calls, and code changes.
-- **VS Code/Copilot**: Watches Copilot events, file edits, and log files to track AI-generated code.
+- **VS Code with Copilot or Claude Code**: Watches Copilot and Claude Code events, file edits, and log files to track AI-generated code.
 - **Uploads**: Sends collected data (prompts, AI responses, code diffs) to Mobb backend for analysis.
 
 ## Features
