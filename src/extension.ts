@@ -1,12 +1,11 @@
 import * as vscode from 'vscode'
 
-// These imports are safe because they don't immediately execute code that reads constants
 import { initDB } from './cursor/db'
-// Import configLoader first, before any modules that might use constants
 import {
+  getConfig,
   hasRelevantConfigurationChanged,
-  loadConfigurationToEnv,
-} from './shared/configLoader'
+  initConfig,
+} from './shared/config'
 import { dailyMcpDetection } from './shared/DailyMcpDetection'
 import { initLogger, logger } from './shared/logger'
 import { MonitorManager } from './shared/MonitorManager'
@@ -29,11 +28,21 @@ let tracyController: TracyController | null = null
 let statusBarItem: vscode.StatusBarItem | null = null
 
 export async function activate(context: vscode.ExtensionContext) {
-  // Load VS Code configuration to environment variables FIRST
-  // This must happen before any modules that use constants are imported/executed
-  loadConfigurationToEnv()
+  // Initialize configuration from THIS extension's package.json
+  // Each extension has its own extensionPath, so dev and prod get different configs
+  initConfig(context.extensionPath)
+
+  const config = getConfig()
 
   initLogger()
+
+  const { apiUrl, webAppUrl, isDevExtension } = config
+  const isLocalEnv = apiUrl.includes('localhost')
+
+  logger.info(
+    { apiUrl, webAppUrl, isLocalEnv, isDevExtension },
+    `Extension environment: ${isLocalEnv ? 'LOCAL' : isDevExtension ? 'DEV' : 'PRODUCTION'}`
+  )
 
   await getAuthenticatedForUpload()
 
@@ -60,8 +69,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // When configuration changes, we need to reload the window because:
     // 1. Reloading the window completely restarts the extension process
     // 2. The extension's activate() function runs again from scratch
-    // 3. The new configuration values are loaded into process.env
-    // 4. All modules are re-imported and constants are re-evaluated with the new values
+    // 3. The new configuration values are loaded
     // Note: We check if onDidChangeConfiguration exists to avoid errors in test environment
     if (vscode.workspace.onDidChangeConfiguration) {
       context.subscriptions.push(

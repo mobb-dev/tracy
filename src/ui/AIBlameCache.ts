@@ -1,5 +1,3 @@
-import { getAuthenticatedGQLClient } from '../mobbdev_src/commands/handleMobbLogin'
-import { API_URL } from '../mobbdev_src/constants'
 import {
   AiBlameInferenceType,
   AnalyzeCommitForExtensionAiBlameMutation,
@@ -10,6 +8,8 @@ import {
 } from '../mobbdev_src/features/analysis/scm/generates/client_generates'
 import { configStore } from '../mobbdev_src/utils/ConfigStoreService'
 import { subscribeToBlameAiAnalysisRequests } from '../mobbdev_src/utils/subscribe/subscribe'
+import { getConfig } from '../shared/config'
+import { createGQLClient } from '../shared/gqlClientFactory'
 import { logger } from '../shared/logger'
 
 export type AIBlameAttribution = {
@@ -235,7 +235,7 @@ export class AIBlameCache {
         )
 
         // Get authentication client for subscription first
-        await getAuthenticatedGQLClient({})
+        await createGQLClient()
 
         // Get the API token from config store (guaranteed to be valid after successful auth)
         const apiToken = configStore.get('apiToken') as string
@@ -274,7 +274,7 @@ export class AIBlameCache {
               auth: {
                 mobbApiKey: apiToken,
               },
-              graphqlEndpoint: API_URL.replace('http', 'ws'),
+              graphqlEndpoint: getConfig().apiUrl.replace('http', 'ws'),
               websocketImpl: WebSocket,
             },
             callbacks: {
@@ -388,7 +388,7 @@ export async function analyzeCommitForExtensionAIBlameWrapper(
 ): Promise<AnalyzeCommitForExtensionAiBlameMutation> {
   try {
     logger.info('Authenticating for AI Blame commit analysis')
-    const gqlClient = await getAuthenticatedGQLClient({})
+    const gqlClient = await createGQLClient()
 
     logger.info(
       `Analyzing commit for AI Blame: sha=${commitSha}, org=${organizationId}, repo=${repositoryURL}`
@@ -414,7 +414,7 @@ export async function GetAiBlamePrompt(
   attributionId: string
 ): Promise<string | null> {
   try {
-    const gqlClient = await getAuthenticatedGQLClient({})
+    const gqlClient = await createGQLClient()
     const variables: GetAiBlameAttributionPromptQueryVariables = {
       aiBlameAttributionId: attributionId,
     }

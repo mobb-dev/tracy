@@ -22,7 +22,7 @@ This will:
 
 ## Entry Point
 
-The extension entry point is `src/extension.ts`. The `activate()` function is called when the extension loads. Set a breakpoint on line 18 to catch extension activation:
+The extension entry point is `src/extension.ts`. The `activate()` function is called when the extension loads. Set a breakpoint at the start of `activate()` to catch extension activation:
 
 ```typescript
 export async function activate(context: vscode.ExtensionContext) {
@@ -32,8 +32,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
 ## Common Debug Points
 
-- **Extension activation**: `src/extension.ts:18` - `activate()` function
-- **Monitor initialization**: `src/extension.ts:30` - `MonitorManager` creation
+- **Extension activation**: `src/extension.ts` - search for `export async function activate`
+- **Monitor initialization**: `src/extension.ts` - search for `new MonitorManager`
 - **Cursor monitoring**: `src/cursor/CursorMonitor.ts` - Cursor-specific monitoring logic
 - **Copilot monitoring**: `src/copilot/CopilotMonitor.ts` - Copilot event tracking
 

@@ -27,19 +27,19 @@ show_help() {
     echo "The dev extension uses a different ID so it can run alongside the marketplace version."
     echo ""
     echo "Options:"
-    echo "  --env ENV       Environment preset: local (default), staging, prod"
+    echo "  --env ENV       Environment preset: local (default), sandbox, prod"
     echo "  --api-url URL   Override API URL"
     echo "  --web-url URL   Override Web App URL"
     echo "  -h, --help      Show this help message"
     echo ""
     echo "Environment presets:"
     echo "  local:   http://localhost:8080/v1/graphql, http://localhost:5173"
-    echo "  staging: https://api-st-stenant.mobb.dev/v1/graphql, https://st-stenant.mobb.dev"
+    echo "  sandbox: https://api-st-stenant.mobb.dev/v1/graphql, https://st-stenant.mobb.dev"
     echo "  prod:    https://api.mobb.ai/v1/graphql, https://app.mobb.ai"
     echo ""
     echo "Examples:"
     echo "  ./package-dev.sh                    # Build with local env (default)"
-    echo "  ./package-dev.sh --env staging      # Build with staging env"
+    echo "  ./package-dev.sh --env sandbox      # Build with sandbox env"
     echo "  ./package-dev.sh --env prod         # Build with prod env"
     echo "  ./package-dev.sh --api-url http://custom:8080/v1/graphql"
 }
@@ -52,7 +52,7 @@ set_env_urls() {
             API_URL="http://localhost:8080/v1/graphql"
             WEB_URL="http://localhost:5173"
             ;;
-        staging)
+        sandbox)
             API_URL="https://api-st-stenant.mobb.dev/v1/graphql"
             WEB_URL="https://st-stenant.mobb.dev"
             ;;
@@ -91,9 +91,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate environment
-if [[ "$ENV" != "local" && "$ENV" != "staging" && "$ENV" != "prod" ]]; then
+if [[ "$ENV" != "local" && "$ENV" != "sandbox" && "$ENV" != "prod" ]]; then
     echo -e "${RED}Invalid environment: $ENV${NC}"
-    echo "Valid options: local, staging, prod"
+    echo "Valid options: local, sandbox, prod"
     exit 1
 fi
 
@@ -104,14 +104,14 @@ elif [[ -z "$API_URL" ]]; then
     # Only API_URL missing, get default for this env
     case $ENV in
         local) API_URL="http://localhost:8080/v1/graphql" ;;
-        staging) API_URL="https://api-st-stenant.mobb.dev/v1/graphql" ;;
+        sandbox) API_URL="https://api-st-stenant.mobb.dev/v1/graphql" ;;
         prod) API_URL="https://api.mobb.ai/v1/graphql" ;;
     esac
 elif [[ -z "$WEB_URL" ]]; then
     # Only WEB_URL missing, get default for this env
     case $ENV in
         local) WEB_URL="http://localhost:5173" ;;
-        staging) WEB_URL="https://st-stenant.mobb.dev" ;;
+        sandbox) WEB_URL="https://st-stenant.mobb.dev" ;;
         prod) WEB_URL="https://app.mobb.ai" ;;
     esac
 fi
@@ -159,8 +159,12 @@ if [[ ! -f icon-dev.png ]]; then
 fi
 
 # Create .env file with dev values
+# Uses DEV_* prefixed names to avoid conflicts with production extension
 echo "Creating .env file for dev build..."
 cat > .env << ENVEOF
+MOBB_DEV_EXTENSION=true
+DEV_API_URL=$API_URL
+DEV_WEB_APP_URL=$WEB_URL
 API_URL=$API_URL
 WEB_APP_URL=$WEB_URL
 HASURA_ACCESS_KEY=dummy
@@ -182,7 +186,7 @@ rm -rf out
 # Install dependencies and build
 echo ""
 echo "Installing dependencies..."
-npm install --legacy-peer-deps
+npm install
 
 echo ""
 echo "Building..."

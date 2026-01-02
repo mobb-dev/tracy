@@ -13,6 +13,12 @@ vi.mock('vscode', () => {
   return {
     workspace: {
       workspaceFolders: [],
+      getConfiguration: vi.fn(() => ({
+        inspect: vi.fn(() => ({
+          workspaceValue: undefined,
+          globalValue: undefined,
+        })),
+      })),
     },
     env: {
       appName: 'cursor',
@@ -171,6 +177,7 @@ describe('extension tests', () => {
       const currentPath = __dirname
       activate({
         //we use dummy here because the internal logic goes back one level
+        extensionPath: path.join(currentPath, '..'),
         globalStorageUri: { fsPath: path.join(currentPath, 'files', 'dummy') },
         logPath: '',
         subscriptions: [],

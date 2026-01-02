@@ -9,7 +9,8 @@ What the Human tracker does
     - You make an edit outside the current contiguous line window (beyond the adjacency gap), or
     - The segment grows beyond `segmentMaxChars` (safety cap), or
     - The time since the last edit in the segment exceeds `maxSegmentDurationMs`, or
-    - A non-human edit group occurs (multi-change event or large single insert). In this case we force-close any open human segment and ignore the non-human group itself.
+    - A non-human edit group occurs (multi-change event or large non-whitespace insert). In this case we force-close any open human segment and ignore the non-human group itself.
+      - Note: Whitespace-only large inserts (e.g., Enter key with auto-indentation producing >10 chars) are classified as `WHITE_SPACE_INSERT` and treated as human edits, so they do NOT close segments.
 - For each closed segment we:
     - Compute basic metrics (duration, edit cadence).
     - Classify it using conservative heuristics and treat only clearly human segments as HUMAN.
@@ -31,7 +32,14 @@ Internal configuration (for developers)
         - `minSegmentCharsWithNoWhitespace` — minimum total length of changed lines required to upload (excluding whitespace).
         - `uploadEnabled` — whether to actually upload segments or just log artifacts.
     - Classifier thresholds (cadence, paste-like detection, etc.) are under `HUMAN_TRACKING_CONFIG.classifier` and used by:
-        - `src/human/eventClassifier.ts` (per-change event classification: multi-change vs large insert vs single small change).
+        - `src/human/eventClassifier.ts` (per-change event classification). Event classifications are:
+            - `EMPTY` — no content changes (non-human)
+            - `SINGLE_CHANGE` — single small change under threshold (human)
+            - `MULTI_CHANGE` — multiple simultaneous changes, e.g., formatter (non-human)
+            - `MULTI_LINE_HUMAN_EDIT` — same content on consecutive lines, e.g., commenting/indenting (human)
+            - `LARGE_INSERT` — single large non-whitespace insert, e.g., paste/AI generation (non-human)
+            - `WHITE_SPACE_INSERT` — single large whitespace-only insert, e.g., Enter + auto-indent (human)
+          - Note: The `/^\s+$/` regex matches all JavaScript whitespace characters including space, tab, newline, carriage return, and Unicode whitespace like non-breaking space (U+00A0).
         - `src/human/segmentClassifier.ts` (future preparation for more complex classification logic per segment - we currently only use the event classifier).
 
 - All thresholds above are internal constants; changing them requires a rebuild.

@@ -6,19 +6,32 @@ import {
   uploadAiBlameHandlerFromExtension,
   type UploadAiBlameResult,
 } from '../mobbdev_src/args/commands/upload_ai_blame'
-import { getAuthenticatedGQLClient } from '../mobbdev_src/commands/handleMobbLogin'
 import { AiBlameInferenceType } from '../mobbdev_src/features/analysis/scm/generates/client_generates'
 import { detectMCPServers } from '../mobbdev_src/mcp'
+import { createGQLClient } from './gqlClientFactory'
 import { logger } from './logger'
 
 export async function getAuthenticatedForUpload() {
   logger.info('Getting authenticated for ide extension')
-  await getAuthenticatedGQLClient({})
+  try {
+    const gqlClient = await createGQLClient()
+    const userInfo = await gqlClient.getUserInfo()
+    if (userInfo?.email) {
+      logger.info({ email: userInfo.email }, 'Authentication successful')
+    } else {
+      logger.warn('Authentication completed but no user info available')
+    }
+  } catch (error) {
+    logger.error(
+      { error },
+      'Authentication failed - user may need to log in via Mobb CLI or browser'
+    )
+  }
 }
 
 export async function detectMcps() {
   try {
-    const gqlClient = await getAuthenticatedGQLClient({})
+    const gqlClient = await createGQLClient()
     const userInfo = await gqlClient.getUserInfo()
     const userEmail = userInfo?.email
 

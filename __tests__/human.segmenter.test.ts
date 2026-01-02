@@ -771,6 +771,179 @@ describe('computeIntervalDistancePostChange', () => {
   })
 })
 
+describe('WHITE_SPACE_INSERT event handling', () => {
+  it('WHITE_SPACE_INSERT event keeps segment open (treated as human)', () => {
+    const seg = new Segmenter()
+    const uri = 'file:///ws/whitespace.ts'
+    const doc: FakeDoc = {
+      uri: { toString: () => uri },
+      fileName: '/ws/whitespace.ts',
+      lineAt: () => ({ text: 'x' }),
+      isUntitled: false,
+      languageId: 'typescript',
+      version: 1,
+      isDirty: false,
+      isClosed: false,
+      save: () => Promise.resolve(true),
+      eol: 1,
+      lineCount: 100,
+      positionAt: () => ({ line: 0, character: 0 }),
+      offsetAt: () => 0,
+      getText: () => '',
+      getWordRangeAtPosition: () => undefined,
+      validateRange: (range: unknown) => range,
+      validatePosition: (position: unknown) => position,
+    }
+
+    // First human edit at line 0
+    let closed = seg.onDidChangeTextDocument(
+      createMockChangeEvent(doc, [makeChange({ startLine: 0, text: 'hello' })]),
+      {
+        ...baseCfg,
+        now: 1000,
+        eventClassification: EventClassification.SINGLE_CHANGE,
+      }
+    )
+    expect(closed).toEqual([])
+
+    // WHITE_SPACE_INSERT (Enter with lots of indentation) should NOT close the segment
+    closed = seg.onDidChangeTextDocument(
+      createMockChangeEvent(doc, [
+        makeChange({ startLine: 0, text: `\n${' '.repeat(20)}` }),
+      ]),
+      {
+        ...baseCfg,
+        now: 1200,
+        eventClassification: EventClassification.WHITE_SPACE_INSERT,
+      }
+    )
+    expect(closed).toEqual([])
+
+    // Segment should still be open
+    expect(seg.getAllOpenSegmentsURIs()).toContain(uri)
+
+    // Close and verify segment spans both edits
+    const closedByUri = seg.closeSegmentByDocURI(uri)
+    expect(closedByUri).toBeDefined()
+    expect(closedByUri!.rangeStartLine).toBe(0)
+  })
+
+  it('typing followed by Enter followed by more typing stays in same segment', () => {
+    const seg = new Segmenter()
+    const uri = 'file:///ws/typing.ts'
+    const doc: FakeDoc = {
+      uri: { toString: () => uri },
+      fileName: '/ws/typing.ts',
+      lineAt: () => ({ text: 'x' }),
+      isUntitled: false,
+      languageId: 'typescript',
+      version: 1,
+      isDirty: false,
+      isClosed: false,
+      save: () => Promise.resolve(true),
+      eol: 1,
+      lineCount: 100,
+      positionAt: () => ({ line: 0, character: 0 }),
+      offsetAt: () => 0,
+      getText: () => '',
+      getWordRangeAtPosition: () => undefined,
+      validateRange: (range: unknown) => range,
+      validatePosition: (position: unknown) => position,
+    }
+
+    // Type "hello" at line 0
+    let closed = seg.onDidChangeTextDocument(
+      createMockChangeEvent(doc, [makeChange({ startLine: 0, text: 'hello' })]),
+      {
+        ...baseCfg,
+        now: 1000,
+        eventClassification: EventClassification.SINGLE_CHANGE,
+      }
+    )
+    expect(closed).toEqual([])
+
+    // Press Enter (whitespace insert) - should NOT close segment
+    closed = seg.onDidChangeTextDocument(
+      createMockChangeEvent(doc, [
+        makeChange({ startLine: 0, text: `\r\n${' '.repeat(12)}` }),
+      ]),
+      {
+        ...baseCfg,
+        now: 1100,
+        eventClassification: EventClassification.WHITE_SPACE_INSERT,
+      }
+    )
+    expect(closed).toEqual([])
+
+    // Type "world" on adjacent line - segment should still be open
+    closed = seg.onDidChangeTextDocument(
+      createMockChangeEvent(doc, [makeChange({ startLine: 1, text: 'world' })]),
+      {
+        ...baseCfg,
+        now: 1200,
+        eventClassification: EventClassification.SINGLE_CHANGE,
+      }
+    )
+    expect(closed).toEqual([])
+
+    // Close and verify single continuous segment
+    const closedByUri = seg.closeSegmentByDocURI(uri)
+    expect(closedByUri).toBeDefined()
+    // All three edits should be in the same segment
+    expect(closedByUri!.rangeStartLine).toBe(0)
+  })
+
+  it('LARGE_INSERT still closes segment (non-whitespace)', () => {
+    const seg = new Segmenter()
+    const uri = 'file:///ws/paste.ts'
+    const doc: FakeDoc = {
+      uri: { toString: () => uri },
+      fileName: '/ws/paste.ts',
+      lineAt: () => ({ text: 'x' }),
+      isUntitled: false,
+      languageId: 'typescript',
+      version: 1,
+      isDirty: false,
+      isClosed: false,
+      save: () => Promise.resolve(true),
+      eol: 1,
+      lineCount: 100,
+      positionAt: () => ({ line: 0, character: 0 }),
+      offsetAt: () => 0,
+      getText: () => '',
+      getWordRangeAtPosition: () => undefined,
+      validateRange: (range: unknown) => range,
+      validatePosition: (position: unknown) => position,
+    }
+
+    // First human edit
+    seg.onDidChangeTextDocument(
+      createMockChangeEvent(doc, [makeChange({ startLine: 0, text: 'hello' })]),
+      {
+        ...baseCfg,
+        now: 1000,
+        eventClassification: EventClassification.SINGLE_CHANGE,
+      }
+    )
+
+    // LARGE_INSERT (paste/autocomplete) SHOULD close the segment
+    const closed = seg.onDidChangeTextDocument(
+      createMockChangeEvent(doc, [
+        makeChange({ startLine: 0, text: 'x'.repeat(100) }),
+      ]),
+      {
+        ...baseCfg,
+        now: 1100,
+        eventClassification: EventClassification.LARGE_INSERT,
+      }
+    )
+
+    // Segment should be closed
+    expect(closed.length).toBe(1)
+    expect(closed[0]?.rangeStartLine).toBe(0)
+  })
+})
+
 describe('MULTI_CHANGE and EMPTY event handling', () => {
   it('MULTI_CHANGE event just rebases segment without closing', () => {
     const seg = new Segmenter()

@@ -82,6 +82,7 @@ describe('copilot extension module', () => {
 
   it('activates with a minimal context', () => {
     const ctx: unknown = {
+      extensionPath: `${__dirname}/..`,
       extensionUri: { fsPath: '/tmp/ext' },
       globalStorageUri: { fsPath: '/tmp/store' },
       logPath: '/tmp/logs',

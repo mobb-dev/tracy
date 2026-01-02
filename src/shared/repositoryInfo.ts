@@ -1,7 +1,7 @@
 import * as vscode from 'vscode'
 
-import { getAuthenticatedGQLClient } from '../mobbdev_src/commands/handleMobbLogin'
 import { GitService } from '../mobbdev_src/features/analysis/scm/services/GitService'
+import { createGQLClient } from './gqlClientFactory'
 import { logger } from './logger'
 
 export enum AppType {
@@ -53,7 +53,7 @@ export async function getRepositoryInfo(): Promise<RepositoryInfo | null> {
     }
 
     // Get organization ID from user info
-    const gqlClient = await getAuthenticatedGQLClient({})
+    const gqlClient = await createGQLClient()
     const userInfo = await gqlClient.getUserInfo()
     logger.info(`user info: ${JSON.stringify(userInfo)}`)
     if (!userInfo?.email) {

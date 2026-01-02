@@ -68,4 +68,32 @@ describe('CursorTabMonitor', () => {
       'this is a long cursor tab completion line 1\nthis is a long cursor tab completion line 2'
     )
   })
+
+  it('should filter out human-written lines that appear in both removed and added sections', async () => {
+    uploadCursorChangesSpy.mockResolvedValue()
+
+    const monitor = new CursorTabMonitor(
+      {
+        logPath: '/tmp',
+        subscriptions: [],
+      } as vscode.ExtensionContext,
+      AppType.CURSOR,
+      10
+    )
+
+    // Simulate a diff where the first line appears in both - and + (human-written)
+    // Only truly AI-generated lines should be included
+    ;(monitor as any).processLogEntries(
+      '-|export function uploadChange(change: ProcessedChange) {\n+|export function uploadChange(change: ProcessedChange) {\n+|return {\n+|    model: change.model,\n+|  }\n+|}'
+    )
+
+    // Upload is scheduled via a Promise chain; allow it to be queued.
+    await setTimeout(0)
+
+    expect(uploadCursorChangesSpy).toHaveBeenCalledOnce()
+
+    const change = uploadCursorChangesSpy.mock.calls.at(0).at(0).at(0)
+    // The first line should be filtered out because it appears in both - and +
+    expect(change.additions).toBe('return {\n    model: change.model,\n  }\n}')
+  })
 })

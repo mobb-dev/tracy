@@ -103,16 +103,25 @@ export class CursorTabMonitor extends BaseMonitor {
 
   private processLogEntries(content: string): void {
     const lines = content.split('\n').filter((line) => line.trim())
-    let additions = ''
+
+    // First pass: collect removed and added lines
+    const removedLines = new Set<string>()
+    const addedLines: string[] = []
 
     for (const line of lines) {
-      if (line.startsWith('+|')) {
-        const addition = line.substring(2)
-        additions += `${addition}\n`
+      if (line.startsWith('-|')) {
+        removedLines.add(line.substring(2))
+      } else if (line.startsWith('+|')) {
+        addedLines.push(line.substring(2))
       }
     }
 
-    additions = additions.trim()
+    // Second pass: filter out added lines that are identical to removed lines (human-written)
+    const aiGeneratedAdditions = addedLines.filter(
+      (line) => !removedLines.has(line)
+    )
+
+    const additions = aiGeneratedAdditions.join('\n').trim()
 
     if (additions.length === 0) {
       logger.info(`Cursor tab additions are empty`)

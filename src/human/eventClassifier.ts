@@ -5,6 +5,9 @@ import { EventClassification, type EventClassificationCode } from './types'
 
 export type EventShape = Pick<vscode.TextDocumentChangeEvent, 'contentChanges'>
 
+// Pattern to detect whitespace-only text
+const WHITESPACE_ONLY_PATTERN = /^\s+$/
+
 /**
  * Classifies a text document change event based on its shape (number of
  * contentChanges and size of the first insertion).
@@ -32,7 +35,8 @@ export function detectEventClassification(event: EventShape): {
   }
 
   const changeCount = event.contentChanges.length
-  const firstInsertSize = event.contentChanges[0]?.text?.length ?? 0
+  const firstChangeText = event.contentChanges[0]?.text ?? ''
+  const firstInsertSize = firstChangeText.length
 
   // Multiple simultaneous changes → non-human group (format event).
   if (changeCount > 1) {
@@ -50,6 +54,15 @@ export function detectEventClassification(event: EventShape): {
     firstInsertSize >
     HUMAN_TRACKING_CONFIG.classifier.largeSingleInsertThreshold
   ) {
+    // Check if the insert is whitespace-only (e.g., Enter key with auto-indentation).
+    // Whitespace-only inserts are still considered human-like even if they exceed the threshold.
+    if (WHITESPACE_ONLY_PATTERN.test(firstChangeText)) {
+      return {
+        eventClassification: EventClassification.WHITE_SPACE_INSERT,
+        changeCount,
+        firstInsertSize,
+      }
+    }
     return {
       eventClassification: EventClassification.LARGE_INSERT,
       changeCount,

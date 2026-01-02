@@ -1,8 +1,24 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+// Mock vscode (required by config.ts)
+vi.mock('vscode', () => ({
+  workspace: {
+    getConfiguration: vi.fn(() => ({
+      inspect: vi.fn(() => ({
+        workspaceValue: undefined,
+        globalValue: undefined,
+      })),
+    })),
+  },
+}))
+
 // Mock GraphQL client and logger
 vi.mock('../src/mobbdev_src/commands/handleMobbLogin', () => ({
   getAuthenticatedGQLClient: vi.fn(),
+}))
+
+vi.mock('../src/shared/gqlClientFactory', () => ({
+  createGQLClient: vi.fn(),
 }))
 
 vi.mock('../src/shared/logger', () => ({
@@ -162,6 +178,9 @@ describe('AIBlameCache', () => {
         '../src/mobbdev_src/commands/handleMobbLogin'
       )
       ;(getAuthenticatedGQLClient as any).mockResolvedValue(mockGqlClient)
+
+      const { createGQLClient } = await import('../src/shared/gqlClientFactory')
+      ;(createGQLClient as any).mockResolvedValue(mockGqlClient)
 
       const { AIBlameCache } = await import('../src/ui/AIBlameCache')
       const cache = new AIBlameCache('repo-url', 'org-id')
