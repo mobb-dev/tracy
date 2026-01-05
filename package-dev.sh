@@ -150,7 +150,7 @@ cleanup() {
         echo "Removed dev .env file"
     fi
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 # Verify dev icon exists (committed to repo)
 if [[ ! -f icon-dev.png ]]; then

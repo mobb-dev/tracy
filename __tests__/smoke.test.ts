@@ -60,19 +60,13 @@ vi.mock('vscode', () => {
   }
 })
 
-//mock the fs readfile() function
-vi.mock('node:fs/promises', async () => {
-  const actual = await vi.importActual<{
-    readFile: typeof import('node:fs/promises').readFile
-  }>('node:fs/promises')
-  return {
-    ...actual,
-    readFile: vi.fn((path, options) => {
-      //read the relative path to `files/empty-state.vscdb`
-      return actual.readFile(`${__dirname}/files/empty-state.vscdb`, options)
-    }),
-  }
-})
+// Mock the cursor db module (uses @vscode/sqlite3 which won't work in tests)
+vi.mock('../src/cursor/db', () => ({
+  initDB: vi.fn().mockResolvedValue(undefined),
+  closeDB: vi.fn().mockResolvedValue(undefined),
+  getRowsByLike: vi.fn().mockResolvedValue([]),
+  getCompletedFileEditBubbles: vi.fn().mockResolvedValue([]),
+}))
 
 describe('copilot extension module', () => {
   it('exports activate and deactivate functions', () => {

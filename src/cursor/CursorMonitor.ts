@@ -7,8 +7,8 @@ import { logger } from '../shared/logger'
 import { AppType } from '../shared/repositoryInfo'
 import { startupTimestamp } from '../shared/startupTimestamp'
 import { uploadCursorChanges } from '../shared/uploader'
-import { getRowsByLike } from './db'
-import { ignoreBubbles, processBubbles } from './processor'
+import { getCompletedFileEditBubbles } from './db'
+import { markExistingToolCallsAsUploaded, processBubbles } from './processor'
 
 const POLLING_INTERVAL = 5000
 
@@ -37,11 +37,10 @@ export class CursorMonitor extends BaseMonitor {
     logger.info(`Starting ${this.name}`)
 
     try {
-      const rows = await getRowsByLike({
-        key: 'bubbleId:%',
-        keyOnly: true,
-      })
-      ignoreBubbles(rows)
+      // Fetch only completed file edits (bubbles with codeblockId)
+      // This is much more efficient than fetching all bubbles
+      const rows = await getCompletedFileEditBubbles()
+      markExistingToolCallsAsUploaded(rows)
 
       this._isRunning = true
       this.abortController = new AbortController()
@@ -94,10 +93,9 @@ export class CursorMonitor extends BaseMonitor {
           break
         }
 
-        const rows = await getRowsByLike({
-          key: 'bubbleId:%',
-          keyOnly: true,
-        })
+        // Fetch only completed file edits (optimized query)
+        const rows = await getCompletedFileEditBubbles()
+
         const changes = await processBubbles(rows, this.startupTimestamp)
 
         // Log only if something changed

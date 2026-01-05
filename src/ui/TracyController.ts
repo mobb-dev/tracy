@@ -129,7 +129,7 @@ export class TracyController {
         },
       }
     } catch (error) {
-      logger.error('Error loading blame info:', error)
+      logger.error({ error }, 'Error loading blame info:')
       return {
         success: false,
         error: 'unknown_error',
@@ -173,7 +173,7 @@ export class TracyController {
         lineState: LineState.NO_ATTRIBUTION_DATA,
       }
     } catch (error) {
-      logger.error('Error loading attribution data:', error)
+      logger.error({ error }, 'Error loading attribution data:')
       return {
         success: false,
         attribution: null,
@@ -294,7 +294,7 @@ export class TracyController {
         return
       }
 
-      logger.error('Error in handleLineChange:', error)
+      logger.error({ error }, 'Error in handleLineChange:')
       this.updateStatusBarState(
         {
           attribution: null,
@@ -435,7 +435,7 @@ export class TracyController {
         return
       }
 
-      logger.error('Error in handlePanelShow:', error)
+      logger.error({ error }, 'Error in handlePanelShow:')
       await this.uiUpdateInfoPanelBlameState(
         'ERROR',
         'Failed to load tracy information'

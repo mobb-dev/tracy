@@ -1,5 +1,3 @@
-import { EventEmitter } from 'node:events'
-
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('vscode', () => ({}))
@@ -25,18 +23,9 @@ vi.mock('os', () => ({
   tmpdir: vi.fn(() => '/tmp'),
 }))
 
-vi.mock('child_process', () => {
-  return {
-    spawn: vi.fn(),
-  }
-})
-
-class FakeStream extends EventEmitter {}
-class FakeChildProcess extends EventEmitter {
-  stdout: FakeStream | null = new FakeStream()
-  stderr: FakeStream | null = new FakeStream()
-  kill = vi.fn()
-}
+vi.mock('../src/mobbdev_src/utils/gitUtils', () => ({
+  createGitWithLogging: vi.fn(),
+}))
 
 describe('GitBlameCache', () => {
   afterEach(() => {
@@ -44,11 +33,18 @@ describe('GitBlameCache', () => {
   })
 
   it('does not hang when git cannot be spawned (error event)', async () => {
-    const { spawn } = await import('child_process')
+    const { createGitWithLogging } = await import(
+      '../src/mobbdev_src/utils/gitUtils'
+    )
     const { logger } = await import('../src/shared/logger')
 
-    const proc = new FakeChildProcess()
-    ;(spawn as unknown as ReturnType<typeof vi.fn>).mockReturnValue(proc)
+    // Mock git.raw() to throw an error (simulating git command failure)
+    const mockGit = {
+      raw: vi.fn().mockRejectedValue(new Error('spawn git ENOENT')),
+    }
+    ;(
+      createGitWithLogging as unknown as ReturnType<typeof vi.fn>
+    ).mockReturnValue(mockGit)
 
     const { GitBlameCache } = await import('../src/ui/GitBlameCache')
 
@@ -63,28 +59,29 @@ describe('GitBlameCache', () => {
 
     const cache = new GitBlameCache('/repo')
 
-    // Simulate a spawn failure (e.g., ENOENT when git is missing)
-    queueMicrotask(() => {
-      proc.emit(
-        'error',
-        Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' })
-      )
-    })
-
     const result = await cache.getBlame(doc)
 
     expect(result).toBeNull()
     expect(logger.warn).toHaveBeenCalled()
-    expect(spawn).toHaveBeenCalled()
+    expect(createGitWithLogging).toHaveBeenCalled()
   })
 
   describe('document version tracking', () => {
     it('uses cached result when document version matches', async () => {
-      const { spawn } = await import('child_process')
+      const { createGitWithLogging } = await import(
+        '../src/mobbdev_src/utils/gitUtils'
+      )
       const { GitBlameCache } = await import('../src/ui/GitBlameCache')
 
-      const proc = new FakeChildProcess()
-      ;(spawn as unknown as ReturnType<typeof vi.fn>).mockReturnValue(proc)
+      // Mock successful git blame output
+      const mockGit = {
+        raw: vi
+          .fn()
+          .mockResolvedValue('abc123 1 1 1\nauthor Test Author\n1) line 1\n'),
+      }
+      ;(
+        createGitWithLogging as unknown as ReturnType<typeof vi.fn>
+      ).mockReturnValue(mockGit)
 
       const doc = {
         uri: { fsPath: '/repo/file.ts' },
@@ -95,37 +92,38 @@ describe('GitBlameCache', () => {
       } as any
 
       const cache = new GitBlameCache('/repo')
-
-      // Mock successful git blame output
-      queueMicrotask(() => {
-        proc.stdout!.emit(
-          'data',
-          Buffer.from('abc123 1 1 1\nauthor Test Author\n1) line 1\n')
-        )
-        proc.emit('close', 0)
-      })
 
       const result1 = await cache.getBlame(doc)
       expect(result1).not.toBeNull()
 
       // Reset mock for second call
-      vi.mocked(spawn).mockClear()
-      const proc2 = new FakeChildProcess()
-      ;(spawn as unknown as ReturnType<typeof vi.fn>).mockReturnValue(proc2)
+      vi.mocked(createGitWithLogging).mockClear()
+      ;(
+        createGitWithLogging as unknown as ReturnType<typeof vi.fn>
+      ).mockReturnValue(mockGit)
 
       // Second call with same document version should use cache
       const result2 = await cache.getBlame(doc)
 
       expect(result2).toEqual(result1)
-      expect(spawn).not.toHaveBeenCalled() // Should not spawn git again
+      expect(createGitWithLogging).not.toHaveBeenCalled() // Should not call git again
     })
 
     it('fetches new data when document version changes', async () => {
-      const { spawn } = await import('child_process')
+      const { createGitWithLogging } = await import(
+        '../src/mobbdev_src/utils/gitUtils'
+      )
       const { GitBlameCache } = await import('../src/ui/GitBlameCache')
 
-      let proc = new FakeChildProcess()
-      ;(spawn as unknown as ReturnType<typeof vi.fn>).mockReturnValue(proc)
+      // Mock first git result
+      const mockGit1 = {
+        raw: vi
+          .fn()
+          .mockResolvedValue('abc123 1 1 1\nauthor Test Author\n1) line 1\n'),
+      }
+      ;(
+        createGitWithLogging as unknown as ReturnType<typeof vi.fn>
+      ).mockReturnValue(mockGit1)
 
       const doc = {
         uri: { fsPath: '/repo/file.ts' },
@@ -136,38 +134,29 @@ describe('GitBlameCache', () => {
       } as any
 
       const cache = new GitBlameCache('/repo')
-
-      // First call
-      queueMicrotask(() => {
-        proc.stdout!.emit(
-          'data',
-          Buffer.from('abc123 1 1 1\nauthor Test Author\n1) line 1\n')
-        )
-        proc.emit('close', 0)
-      })
 
       const result1 = await cache.getBlame(doc)
       expect(result1).not.toBeNull()
 
       // Change document version
       doc.version = 2
-      vi.mocked(spawn).mockClear()
+      vi.mocked(createGitWithLogging).mockClear()
 
-      proc = new FakeChildProcess()
-      ;(spawn as unknown as ReturnType<typeof vi.fn>).mockReturnValue(proc)
-
-      // Second call with different version should fetch new data
-      queueMicrotask(() => {
-        proc.stdout!.emit(
-          'data',
-          Buffer.from('def456 1 1 1\nauthor New Author\n1) modified line\n')
-        )
-        proc.emit('close', 0)
-      })
+      // Mock second git result
+      const mockGit2 = {
+        raw: vi
+          .fn()
+          .mockResolvedValue(
+            'def456 1 1 1\nauthor New Author\n1) modified line\n'
+          ),
+      }
+      ;(
+        createGitWithLogging as unknown as ReturnType<typeof vi.fn>
+      ).mockReturnValue(mockGit2)
 
       const result2 = await cache.getBlame(doc)
 
-      expect(spawn).toHaveBeenCalled() // Should spawn git again
+      expect(createGitWithLogging).toHaveBeenCalled() // Should call git again
       expect(result2).not.toEqual(result1) // Results should be different
       expect(result2?.documentVersion).toBe(2)
     })
@@ -176,11 +165,19 @@ describe('GitBlameCache', () => {
   describe('dirty file handling', () => {
     it('creates temp file for dirty documents', async () => {
       const fs = await import('fs')
-      const { spawn } = await import('child_process')
+      const { createGitWithLogging } = await import(
+        '../src/mobbdev_src/utils/gitUtils'
+      )
       const { GitBlameCache } = await import('../src/ui/GitBlameCache')
 
-      const proc = new FakeChildProcess()
-      ;(spawn as unknown as ReturnType<typeof vi.fn>).mockReturnValue(proc)
+      const mockGit = {
+        raw: vi
+          .fn()
+          .mockResolvedValue('abc123 1 1 1\nauthor Test Author\n1) line 1\n'),
+      }
+      ;(
+        createGitWithLogging as unknown as ReturnType<typeof vi.fn>
+      ).mockReturnValue(mockGit)
 
       const dirtyDoc = {
         uri: { fsPath: '/repo/file.ts' },
@@ -192,14 +189,6 @@ describe('GitBlameCache', () => {
 
       const cache = new GitBlameCache('/repo')
 
-      setTimeout(() => {
-        proc.stdout!.emit(
-          'data',
-          Buffer.from('abc123 1 1 1\nauthor Test Author\n1) line 1\n')
-        )
-        proc.emit('close', 0)
-      }, 0)
-
       await cache.getBlame(dirtyDoc)
 
       // Should create temp file with document content
@@ -209,21 +198,27 @@ describe('GitBlameCache', () => {
         'utf8'
       )
 
-      // Should call git with --contents flag pointing to temp file
-      expect(spawn).toHaveBeenCalledWith(
-        'git',
-        expect.arrayContaining(['--contents']),
-        expect.any(Object)
+      // Should call git.raw() with --contents flag pointing to temp file
+      expect(mockGit.raw).toHaveBeenCalledWith(
+        expect.arrayContaining(['--contents'])
       )
     })
 
     it('cleans up temp files after git blame completes', async () => {
       const fs = await import('fs')
-      const { spawn } = await import('child_process')
+      const { createGitWithLogging } = await import(
+        '../src/mobbdev_src/utils/gitUtils'
+      )
       const { GitBlameCache } = await import('../src/ui/GitBlameCache')
 
-      const proc = new FakeChildProcess()
-      ;(spawn as unknown as ReturnType<typeof vi.fn>).mockReturnValue(proc)
+      const mockGit = {
+        raw: vi
+          .fn()
+          .mockResolvedValue('abc123 1 1 1\nauthor Test Author\n1) line 1\n'),
+      }
+      ;(
+        createGitWithLogging as unknown as ReturnType<typeof vi.fn>
+      ).mockReturnValue(mockGit)
 
       const dirtyDoc = {
         uri: { fsPath: '/repo/file.ts' },
@@ -234,14 +229,6 @@ describe('GitBlameCache', () => {
       } as any
 
       const cache = new GitBlameCache('/repo')
-
-      setTimeout(() => {
-        proc.stdout!.emit(
-          'data',
-          Buffer.from('abc123 1 1 1\nauthor Test Author\n1) line 1\n')
-        )
-        proc.emit('close', 0)
-      }, 0)
 
       await cache.getBlame(dirtyDoc)
 
@@ -253,11 +240,19 @@ describe('GitBlameCache', () => {
 
     it('cleans up temp files even when git blame fails', async () => {
       const fs = await import('fs')
-      const { spawn } = await import('child_process')
+      const { createGitWithLogging } = await import(
+        '../src/mobbdev_src/utils/gitUtils'
+      )
       const { GitBlameCache } = await import('../src/ui/GitBlameCache')
 
-      const proc = new FakeChildProcess()
-      ;(spawn as unknown as ReturnType<typeof vi.fn>).mockReturnValue(proc)
+      const mockGit = {
+        raw: vi
+          .fn()
+          .mockRejectedValue(new Error('fatal: not a git repository')),
+      }
+      ;(
+        createGitWithLogging as unknown as ReturnType<typeof vi.fn>
+      ).mockReturnValue(mockGit)
 
       const dirtyDoc = {
         uri: { fsPath: '/repo/file.ts' },
@@ -268,11 +263,6 @@ describe('GitBlameCache', () => {
       } as any
 
       const cache = new GitBlameCache('/repo')
-
-      setTimeout(() => {
-        proc.stderr!.emit('data', Buffer.from('fatal: not a git repository'))
-        proc.emit('close', 128)
-      }, 0)
 
       const result = await cache.getBlame(dirtyDoc)
 

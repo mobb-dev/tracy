@@ -86,7 +86,7 @@ export async function getRepositoryInfo(): Promise<RepositoryInfo | null> {
     )
     return repoInfo
   } catch (error) {
-    logger.error('Failed to get repository info', error)
+    logger.error({ error }, 'Failed to get repository info')
     return null
   }
 }

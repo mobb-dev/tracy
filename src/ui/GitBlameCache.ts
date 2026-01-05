@@ -1,4 +1,3 @@
-import { spawn } from 'child_process'
 import { promises as fsPromises } from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -9,6 +8,7 @@ import {
   buildGitBlameArgs,
   parseGitBlamePorcelainByLine,
 } from '../mobbdev_src/utils/blame/gitBlameUtils'
+import { createGitWithLogging } from '../mobbdev_src/utils/gitUtils'
 import { logger } from '../shared/logger'
 
 export type GitBlameLineInfo = BlameLineInfo
@@ -97,83 +97,12 @@ export class GitBlameCache {
     })
 
     try {
-      const blameInfo: GitBlameInfo = await new Promise<GitBlameInfo>(
-        (resolve, reject) => {
-          let settled = false
-          const safeResolve = (value: GitBlameInfo): void => {
-            if (settled) {
-              return
-            }
-            settled = true
-            resolve(value)
-          }
-          const safeReject = (error: unknown): void => {
-            if (settled) {
-              return
-            }
-            settled = true
-            reject(error)
-          }
+      const git = createGitWithLogging(repoRoot, logger)
+      const blameOutput = await git.raw(args)
 
-          let proc: ReturnType<typeof spawn>
-          try {
-            proc = spawn('git', args, {
-              cwd: repoRoot,
-              stdio: ['ignore', 'pipe', 'pipe'],
-            })
-          } catch (error) {
-            safeReject(error)
-            return
-          }
-
-          let stdout = ''
-          let stderr = ''
-
-          // If the process cannot be spawned (e.g., git is missing), Node will
-          // emit an `error` event and may never emit `close`.
-          proc.once('error', (error: Error) => {
-            safeReject(error)
-          })
-
-          const stdoutStream = proc.stdout
-          const stderrStream = proc.stderr
-          if (!stdoutStream || !stderrStream) {
-            try {
-              proc.kill()
-            } catch {
-              /* ignore */
-            }
-            safeReject(new Error('Failed to spawn git blame process'))
-            return
-          }
-
-          stdoutStream.on('data', (data: Buffer) => {
-            stdout += data.toString()
-          })
-
-          stderrStream.on('data', (data: Buffer) => {
-            stderr += data.toString()
-          })
-
-          stdoutStream.once('error', (error: Error) => {
-            safeReject(error)
-          })
-          stderrStream.once('error', (error: Error) => {
-            safeReject(error)
-          })
-
-          proc.once('close', (code: number) => {
-            if (code !== 0) {
-              safeReject(new Error(`Git blame failed: ${stderr}`))
-              return
-            }
-            // Parse the porcelain format output to extract line -> hash mapping
-            const lines = parseGitBlamePorcelainByLine(stdout)
-            safeResolve({ lines, documentVersion: document.version || 0 })
-          })
-        }
-      )
-      return blameInfo
+      // Parse the porcelain format output to extract line -> hash mapping
+      const lines = parseGitBlamePorcelainByLine(blameOutput)
+      return { lines, documentVersion: document.version || 0 }
     } finally {
       await cleanupTempFile()
     }

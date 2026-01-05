@@ -114,8 +114,8 @@ export class AIBlameCache {
         return result
       } catch (error) {
         logger.error(
-          `AIBlameCache: Failed to analyze commit ${commitSha}`,
-          error
+          { error, commitSha },
+          `AIBlameCache: Failed to analyze commit ${commitSha}`
         )
         return null
       } finally {
@@ -146,8 +146,8 @@ export class AIBlameCache {
       return prompt
     } catch (error) {
       logger.error(
-        `AIBlameCache: Failed to get prompt for attribution ${attributionId}`,
-        error
+        { error, attributionId },
+        `AIBlameCache: Failed to get prompt for attribution ${attributionId}`
       )
       return null
     }
@@ -261,8 +261,8 @@ export class AIBlameCache {
             } catch (e) {
               // Best-effort cleanup. Avoid throwing from cleanup path.
               logger.error(
-                `AIBlameCache: Error while unsubscribing for commit ${commitSha}`,
-                e
+                { error: e, commitSha },
+                `AIBlameCache: Error while unsubscribing for commit ${commitSha}`
               )
             }
             resolve(value)
@@ -322,8 +322,8 @@ export class AIBlameCache {
                   }
                 } catch (error) {
                   logger.error(
-                    `AIBlameCache: Error fetching final results for commit ${commitSha}`,
-                    error
+                    { error, commitSha },
+                    `AIBlameCache: Error fetching final results for commit ${commitSha}`
                   )
                   finalize(null)
                 }
@@ -359,7 +359,10 @@ export class AIBlameCache {
         })
       }
     } catch (error) {
-      logger.error(`AIBlameCache: Error analyzing commit ${commitSha}`, error)
+      logger.error(
+        { error, commitSha },
+        `AIBlameCache: Error analyzing commit ${commitSha}`
+      )
     }
 
     return null
@@ -401,11 +404,11 @@ export async function analyzeCommitForExtensionAIBlameWrapper(
     }
 
     const result = await gqlClient.analyzeCommitForExtensionAIBlame(variables)
-    logger.info('AI Blame commit analysis result', result)
+    logger.info({ result }, 'AI Blame commit analysis result')
 
     return result
   } catch (err) {
-    logger.error('Error during AI Blame commit analysis', err)
+    logger.error({ error: err }, 'Error during AI Blame commit analysis')
     throw err
   }
 }
@@ -444,7 +447,7 @@ export async function GetAiBlamePrompt(
 
     return promptContent
   } catch (err) {
-    logger.error('Error during GetAiBlameAttributionPrompt', err)
+    logger.error({ error: err }, 'Error during GetAiBlameAttributionPrompt')
     return null
   }
 }

@@ -224,8 +224,11 @@ describe('AIBlameCache', () => {
       expect(result).toBeNull()
       // Note: the error is logged both in the wrapper and in the cache layer.
       expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining('AIBlameCache: Error analyzing commit abc123'),
-        expect.any(Error)
+        expect.objectContaining({
+          error: expect.any(Error),
+          commitSha: 'abc123',
+        }),
+        expect.stringContaining('AIBlameCache: Error analyzing commit abc123')
       )
     })
 
@@ -268,8 +271,10 @@ describe('AIBlameCache', () => {
 
       expect(result).toBeNull()
       expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining('Error during GetAiBlameAttributionPrompt'),
-        expect.any(Error)
+        expect.objectContaining({
+          error: expect.any(Error),
+        }),
+        expect.stringContaining('Error during GetAiBlameAttributionPrompt')
       )
     })
   })

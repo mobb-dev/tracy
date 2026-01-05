@@ -59,18 +59,11 @@ export async function uploadHumanChangesFromExtension(
         relativePath: segment.relativePath,
         promptsUUID: result.promptsUUID,
         inferenceUUID: result.inferenceUUID,
-        promptsCounts: {
-          pii: result.promptsCounts.pii,
-          secrets: result.promptsCounts.secrets,
-        },
-        inferenceCounts: {
-          pii: result.inferenceCounts.pii,
-          secrets: result.inferenceCounts.secrets,
-        },
-        totalPII:
-          result.promptsCounts.pii.total + result.inferenceCounts.pii.total,
-        totalSecrets:
-          result.promptsCounts.secrets + result.inferenceCounts.secrets,
+        promptsCounts: result.promptsCounts.detections,
+        inferenceCounts: result.inferenceCounts.detections,
+        totalDetections:
+          result.promptsCounts.detections.total +
+          result.inferenceCounts.detections.total,
         appType: segment.appType,
         segmentClassification: segment.segmentClassification,
       },

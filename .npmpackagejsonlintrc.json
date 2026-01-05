@@ -1,0 +1,15 @@
+{
+  "$schema": "https://npmpackagejsonlint.org/schemas/npmpackagejsonlintrc.json",
+  "rules": {
+    "no-caret-version-dependencies": "error",
+    "no-caret-version-devDependencies": "error",
+    "no-tilde-version-dependencies": "error",
+    "no-tilde-version-devDependencies": "error",
+    "prefer-absolute-version-dependencies": "error",
+    "prefer-absolute-version-devDependencies": "error",
+    "require-name": "error",
+    "require-version": "error",
+    "name-format": "error",
+    "version-format": "error"
+  }
+}

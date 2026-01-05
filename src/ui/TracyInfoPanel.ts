@@ -143,7 +143,7 @@ export class InfoPanel implements vscode.Disposable {
         return
       }
 
-      logger.error('Failed to auto-load conversation:', error)
+      logger.error({ error }, 'Failed to auto-load conversation')
       this.conversationState = 'ERROR'
       this.conversationError = 'Loading AI conversation failed'
       this.promptContent = undefined
@@ -161,7 +161,7 @@ export class InfoPanel implements vscode.Disposable {
       const parsed = JSON.parse(promptContent)
       return ConversationSchema.parse(parsed)
     } catch (error) {
-      logger.error('Failed to parse conversation:', error)
+      logger.error({ error }, 'Failed to parse conversation')
       return undefined
     }
   }
@@ -291,7 +291,7 @@ export class InfoPanel implements vscode.Disposable {
         query: prompt,
       })
     } catch (error) {
-      logger.error('Failed to continue conversation:', error)
+      logger.error({ error }, 'Failed to continue conversation')
       vscode.window.showErrorMessage('Failed to open chat conversation')
     }
   }

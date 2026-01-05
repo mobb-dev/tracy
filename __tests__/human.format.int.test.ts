@@ -133,12 +133,10 @@ vi.mock('vscode', () => {
 vi.mock('../src/mobbdev_src/args/commands/upload_ai_blame', () => ({
   uploadAiBlameHandlerFromExtension: vi.fn().mockResolvedValue({
     promptsCounts: {
-      pii: { total: 0, high: 0, medium: 0, low: 0 },
-      secrets: 0,
+      detections: { total: 0, high: 0, medium: 0, low: 0 },
     },
     inferenceCounts: {
-      pii: { total: 0, high: 0, medium: 0, low: 0 },
-      secrets: 0,
+      detections: { total: 0, high: 0, medium: 0, low: 0 },
     },
     promptsUUID: 'test-prompts-uuid',
     inferenceUUID: 'test-inference-uuid',

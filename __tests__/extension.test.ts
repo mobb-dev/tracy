@@ -1,13 +1,26 @@
-import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import * as db from '../src/cursor/db'
 import { resetProcessedBubbles } from '../src/cursor/processor'
+// Import activate AFTER setting up mocks
 import { activate } from '../src/extension'
 import * as upload_ai_blame from '../src/mobbdev_src/args/commands/upload_ai_blame'
 import * as ts from '../src/shared/startupTimestamp'
+import {
+  cleanupTestDb,
+  copyDbFile,
+  readCompletedFileEditBubbles,
+  readRowsByLike,
+} from './helpers/testDbReader'
+
+// Mock @vscode/sqlite3 BEFORE any imports that use it
+vi.mock('@vscode/sqlite3', () => ({
+  default: {
+    OPEN_READONLY: 1,
+    Database: vi.fn(),
+  },
+}))
 
 vi.mock('vscode', () => {
   return {
@@ -98,34 +111,41 @@ const uploadAiBlameHandlerFromExtensionSpy = vi
   .spyOn(upload_ai_blame, 'uploadAiBlameHandlerFromExtension')
   .mockResolvedValue({
     promptsCounts: {
-      pii: { total: 0, high: 0, medium: 0, low: 0 },
-      secrets: 0,
+      detections: { total: 0, high: 0, medium: 0, low: 0 },
     },
     inferenceCounts: {
-      pii: { total: 0, high: 0, medium: 0, low: 0 },
-      secrets: 0,
+      detections: { total: 0, high: 0, medium: 0, low: 0 },
     },
     promptsUUID: 'test-prompts-uuid',
     inferenceUUID: 'test-inference-uuid',
   })
 
-// Spy on getRowsByLike to monitor calls while keeping original implementation
-const getRowsByLikeSpy = vi.spyOn(db, 'getRowsByLike')
+// Track mock function calls
+const initDBMock = vi.fn().mockResolvedValue(undefined)
+const closeDBMock = vi.fn().mockResolvedValue(undefined)
+const getRowsByLikeMock = vi.fn()
+const getCompletedFileEditBubblesMock = vi.fn()
 
-function copyDbFile(srcName: string, destName: string) {
-  const currentPath = __dirname
-  const srcPath = path.join(currentPath, 'files', srcName)
-  const destPath = path.join(currentPath, 'files', destName)
-  fs.copyFileSync(srcPath, destPath)
-}
+// Mock db module - uses test helper to read real data
+vi.mock('../src/cursor/db', () => ({
+  initDB: () => initDBMock(),
+  closeDB: () => closeDBMock(),
+  getRowsByLike: (params: { key: string; value?: string; keyOnly?: boolean }) =>
+    getRowsByLikeMock(params),
+  getCompletedFileEditBubbles: () => getCompletedFileEditBubblesMock(),
+}))
 
 beforeEach(() => {
   resetProcessedBubbles()
-  getRowsByLikeSpy.mockClear()
+  initDBMock.mockClear()
+  closeDBMock.mockClear()
+  getRowsByLikeMock.mockClear()
+  getCompletedFileEditBubblesMock.mockClear()
   uploadAiBlameHandlerFromExtensionSpy.mockClear()
 })
 
 afterEach(() => {
+  cleanupTestDb()
   vi.clearAllMocks()
 })
 
@@ -134,7 +154,7 @@ describe('extension tests', () => {
     name: string
     initialDbFile: string
     targetDbFile: string
-    minGetRowsByLikeCalls: number
+    minGetCompletedFileEditBubblesCalls: number
     minUploadAiBlameCalls: number
     snapshotCallsToCheck: number
     uploadCallsToSnapshot: number
@@ -145,18 +165,18 @@ describe('extension tests', () => {
       name: 'full database scenario without thinking models',
       initialDbFile: 'empty-state.vscdb',
       targetDbFile: 'full-state.vscdb',
-      minGetRowsByLikeCalls: 50,
-      minUploadAiBlameCalls: 3,
-      snapshotCallsToCheck: 50,
-      uploadCallsToSnapshot: 3,
+      minGetCompletedFileEditBubblesCalls: 2, // 1 startup + 1 poll
+      minUploadAiBlameCalls: 1,
+      snapshotCallsToCheck: 2,
+      uploadCallsToSnapshot: 1,
     },
     {
       name: 'full database scenario with thinking models',
       initialDbFile: 'empty-state.vscdb',
       targetDbFile: 'full-thinking-state.vscdb',
-      minGetRowsByLikeCalls: 20,
+      minGetCompletedFileEditBubblesCalls: 2, // 1 startup + 1 poll
       minUploadAiBlameCalls: 1,
-      snapshotCallsToCheck: 20,
+      snapshotCallsToCheck: 2,
       uploadCallsToSnapshot: 1,
     },
   ]
@@ -166,62 +186,69 @@ describe('extension tests', () => {
     async ({
       initialDbFile,
       targetDbFile,
-      minGetRowsByLikeCalls,
+      minGetCompletedFileEditBubblesCalls,
       minUploadAiBlameCalls,
       snapshotCallsToCheck,
       uploadCallsToSnapshot,
     }) => {
-      // Copy the initial DB file based on test case
+      // Set up initial empty database
       copyDbFile(initialDbFile, 'state.vscdb')
+
+      // Configure mocks to use test helper reading from real .vscdb files
+      getCompletedFileEditBubblesMock.mockImplementation(() =>
+        Promise.resolve(readCompletedFileEditBubbles())
+      )
+      getRowsByLikeMock.mockImplementation(
+        (params: { key: string; value?: string; keyOnly?: boolean }) =>
+          Promise.resolve(readRowsByLike(params))
+      )
 
       const currentPath = __dirname
       activate({
-        //we use dummy here because the internal logic goes back one level
         extensionPath: path.join(currentPath, '..'),
         globalStorageUri: { fsPath: path.join(currentPath, 'files', 'dummy') },
         logPath: '',
         subscriptions: [],
       } as any)
 
+      // Wait for initial startup call
       await vi.waitFor(() => {
-        expect(getRowsByLikeSpy).toHaveBeenCalled()
+        expect(getCompletedFileEditBubblesMock).toHaveBeenCalled()
       })
 
-      expect(getRowsByLikeSpy).toHaveBeenCalledTimes(1)
-      expect(getRowsByLikeSpy).toHaveBeenCalledWith({
-        key: 'bubbleId:%',
-        value: undefined,
-        keyOnly: true,
-      })
+      // Verify startup call
+      expect(getCompletedFileEditBubblesMock).toHaveBeenCalledTimes(1)
 
-      // Get the return value (if the function has completed)
-      const returnValue = await getRowsByLikeSpy.mock.results[0].value
-      expect(returnValue).toMatchSnapshot(`${targetDbFile}-getRowsByLike-call`)
+      // Get initial return value and snapshot it
+      const initialReturnValue =
+        await getCompletedFileEditBubblesMock.mock.results[0].value
+      expect(initialReturnValue).toMatchSnapshot(
+        `${targetDbFile}-getCompletedFileEditBubbles-call`
+      )
 
-      // Copy the target DB file based on test case
+      // Copy target DB file (simulates new data arriving)
       copyDbFile(targetDbFile, 'state.vscdb')
 
+      // Wait for polling to pick up new data
       await vi.waitFor(
         () => {
-          expect(getRowsByLikeSpy.mock.calls.length).toBeGreaterThanOrEqual(
-            minGetRowsByLikeCalls
-          )
+          expect(
+            getCompletedFileEditBubblesMock.mock.calls.length
+          ).toBeGreaterThanOrEqual(minGetCompletedFileEditBubblesCalls)
         },
         { timeout: 10000 }
       )
 
-      // Check snapshots for getRowsByLike calls
+      // Snapshot polling results
       for (let i = 1; i < snapshotCallsToCheck; i++) {
-        const callArguments = getRowsByLikeSpy.mock.calls[i]
-        expect(callArguments).toMatchSnapshot(
-          `${targetDbFile}-getRowsByLike-call-${i}`
-        )
-        const callReturnValue = await getRowsByLikeSpy.mock.results[i].value
+        const callReturnValue =
+          await getCompletedFileEditBubblesMock.mock.results[i].value
         expect(callReturnValue).toMatchSnapshot(
-          `${targetDbFile}-getRowsByLike-result-${i}`
+          `${targetDbFile}-getCompletedFileEditBubbles-result-${i}`
         )
       }
 
+      // Wait for upload to be triggered
       await vi.waitFor(
         () => {
           expect(
@@ -231,7 +258,7 @@ describe('extension tests', () => {
         { timeout: 20000 }
       )
 
-      // Check snapshots for uploadAiBlame calls
+      // Snapshot upload call arguments
       for (let i = 0; i < uploadCallsToSnapshot; i++) {
         const uploadCallArguments =
           uploadAiBlameHandlerFromExtensionSpy.mock.calls[i]
@@ -241,4 +268,4 @@ describe('extension tests', () => {
       }
     }
   )
-}, 30000)
+}, 60000)

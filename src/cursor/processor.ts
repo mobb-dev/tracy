@@ -1,8 +1,9 @@
 import { AiBlameInferenceType } from '../mobbdev_src/features/analysis/scm/generates/client_generates'
-import { logger } from '../shared/logger'
 import { DBRow, getRowsByLike } from './db'
 
-const processedBubbleIds = new Set<string>()
+// Track uploaded inferences by toolCallId
+// toolCallId exists for all completed tool calls (both accepted and rejected)
+const uploadedToolCallIds = new Set<string>()
 
 export type BubbleData = {
   type: number // 1 for user prompt, 2 for everything else
@@ -58,15 +59,34 @@ export type ProcessedChange = {
   createdAt: Date
   model: string
   type: AiBlameInferenceType
+  composerId?: string
 }
 
 export function resetProcessedBubbles() {
-  processedBubbleIds.clear()
+  uploadedToolCallIds.clear()
 }
 
-export function ignoreBubbles(rows: DBRow[]) {
+/**
+ * Mark existing completed inferences as already processed.
+ * This scans bubbles with completed status and toolCallId to avoid re-uploading old inferences.
+ */
+export function markExistingToolCallsAsUploaded(rows: DBRow[]) {
   for (const row of rows) {
-    processedBubbleIds.add(row.key)
+    if (!row.value) {
+      continue
+    }
+
+    try {
+      const bubbleData = JSON.parse(row.value) as unknown as BubbleData
+      const toolCallId = bubbleData.toolFormerData?.toolCallId
+      const status = bubbleData.toolFormerData?.status
+
+      if (toolCallId && status === 'completed') {
+        uploadedToolCallIds.add(toolCallId)
+      }
+    } catch {
+      // Skip bubbles that can't be parsed
+    }
   }
 }
 
@@ -77,10 +97,44 @@ export async function processBubbles(
   const changes: ProcessedChange[] = []
 
   for (const row of rows) {
-    const change = await processBubble(row.key, startupTimestamp)
+    if (!row.value) {
+      continue
+    }
 
-    if (change) {
-      changes.push(change)
+    // Quick pre-filter: check if this bubble has the required fields
+    try {
+      const bubbleData = JSON.parse(row.value) as unknown as BubbleData
+      const toolCallId = bubbleData.toolFormerData?.toolCallId
+      const status = bubbleData.toolFormerData?.status
+      const createdAt = new Date(bubbleData.createdAt)
+
+      // Skip bubbles without toolCallId or not completed
+      if (!toolCallId || status !== 'completed') {
+        continue
+      }
+
+      // Skip already uploaded toolCallIds
+      if (uploadedToolCallIds.has(toolCallId)) {
+        continue
+      }
+
+      // Skip old bubbles (created before extension startup) and mark as seen
+      // so we don't re-check them on every poll
+      if (createdAt < startupTimestamp) {
+        uploadedToolCallIds.add(toolCallId)
+        continue
+      }
+
+      const change = await processBubble(row)
+
+      // Always mark as seen to avoid infinite retries, even if processing fails
+      uploadedToolCallIds.add(toolCallId)
+
+      if (change) {
+        changes.push(change)
+      }
+    } catch {
+      // Skip bubbles that can't be parsed
     }
   }
 
@@ -95,50 +149,32 @@ type ToolResult = {
   }
 }
 
+/**
+ * Process a single bubble row that has already been pre-filtered
+ * to have a codeblockId (indicating a completed edit) and valid timestamp.
+ */
 async function processBubble(
-  bubbleKey: string,
-  startupTimestamp: Date
+  bubbleRow: DBRow
 ): Promise<ProcessedChange | undefined> {
-  if (processedBubbleIds.has(bubbleKey)) {
-    return
-  }
-
-  const bubbleRows = await getRowsByLike({
-    key: bubbleKey,
-    keyOnly: false,
-  })
-  const bubbleRow = bubbleRows.at(0)
-
-  if (!bubbleRow?.value) {
+  // Value already validated by caller, but double-check
+  if (!bubbleRow.value) {
     return
   }
 
   const bubbleData = JSON.parse(bubbleRow.value) as unknown as BubbleData
-
-  if (!bubbleData) {
-    return
-  }
-
-  const createdAt = new Date(bubbleData.createdAt)
-
-  if (createdAt < startupTimestamp) {
-    processedBubbleIds.add(bubbleRow.key)
-    return
-  }
-
-  if (bubbleData.toolFormerData?.status !== 'completed') {
-    return
-  }
-
-  if (bubbleData.toolFormerData?.userDecision === 'rejected') {
-    return
-  }
-
   const codeBlockId = bubbleData.toolFormerData?.additionalData?.codeblockId
 
   if (!codeBlockId) {
     return
   }
+
+  const toolStatus = bubbleData.toolFormerData?.status
+
+  if (toolStatus !== 'completed') {
+    return
+  }
+
+  const createdAt = new Date(bubbleData.createdAt)
 
   const composerDataRows = await getRowsByLike({
     key: 'composerData:%',
@@ -148,33 +184,35 @@ async function processBubble(
   const composerRow = composerDataRows.at(0)
 
   if (!composerRow?.value) {
-    processedBubbleIds.add(bubbleRow.key)
     return
   }
 
   const composerData = JSON.parse(composerRow.value) as unknown as ComposerData
   const model = composerData.modelConfig?.modelName
 
+  // Extract composerId from composer row key (format: composerData:<composerId>)
+  const composerId = composerRow.key.split(':')[1]
+
   if (!model) {
-    processedBubbleIds.add(bubbleRow.key)
     return
   }
 
-  const additions = extractAdditions(bubbleData.toolFormerData?.result)
+  const toolResult = bubbleData.toolFormerData?.result
+  if (!toolResult) {
+    return
+  }
+
+  const additions = extractAdditions(toolResult)
   const conversation = await extractConversation(composerData, createdAt)
 
-  const result: ProcessedChange = {
+  return {
     additions,
     conversation,
     createdAt,
     model,
     type: AiBlameInferenceType.Chat,
+    composerId,
   }
-
-  processedBubbleIds.add(bubbleRow.key)
-  logger.info(`Processed bubble: ${bubbleRow.key}`)
-
-  return result
 }
 
 function extractAdditions(toolFormerDataResult: string): string {

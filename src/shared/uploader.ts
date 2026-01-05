@@ -70,7 +70,10 @@ export async function detectMcps() {
       organizationId: String(organizationId),
     })
   } catch (e) {
-    logger.error('MCP detection failed, continuing with activation', e)
+    logger.error(
+      { error: e },
+      'MCP detection failed, continuing with activation'
+    )
   }
 }
 
@@ -121,6 +124,7 @@ export async function uploadCursorChanges(changes: ProcessedChange[]) {
           tool: 'Cursor',
           responseTime: change.createdAt.toISOString(),
           blameType: change.type,
+          sessionId: change.composerId,
         })
 
       // Log sanitization counts with metadata
@@ -133,18 +137,11 @@ export async function uploadCursorChanges(changes: ProcessedChange[]) {
           blameType: change.type,
           promptsUUID: result.promptsUUID,
           inferenceUUID: result.inferenceUUID,
-          promptsCounts: {
-            pii: result.promptsCounts.pii,
-            secrets: result.promptsCounts.secrets,
-          },
-          inferenceCounts: {
-            pii: result.inferenceCounts.pii,
-            secrets: result.inferenceCounts.secrets,
-          },
-          totalPII:
-            result.promptsCounts.pii.total + result.inferenceCounts.pii.total,
-          totalSecrets:
-            result.promptsCounts.secrets + result.inferenceCounts.secrets,
+          promptsCounts: result.promptsCounts.detections,
+          inferenceCounts: result.inferenceCounts.detections,
+          totalDetections:
+            result.promptsCounts.detections.total +
+            result.inferenceCounts.detections.total,
         },
         'Cursor upload sanitization metrics'
       )
@@ -186,18 +183,11 @@ export async function uploadCopilotChanges(
         blameType,
         promptsUUID: result.promptsUUID,
         inferenceUUID: result.inferenceUUID,
-        promptsCounts: {
-          pii: result.promptsCounts.pii,
-          secrets: result.promptsCounts.secrets,
-        },
-        inferenceCounts: {
-          pii: result.inferenceCounts.pii,
-          secrets: result.inferenceCounts.secrets,
-        },
-        totalPII:
-          result.promptsCounts.pii.total + result.inferenceCounts.pii.total,
-        totalSecrets:
-          result.promptsCounts.secrets + result.inferenceCounts.secrets,
+        promptsCounts: result.promptsCounts.detections,
+        inferenceCounts: result.inferenceCounts.detections,
+        totalDetections:
+          result.promptsCounts.detections.total +
+          result.inferenceCounts.detections.total,
       },
       'Copilot upload sanitization metrics'
     )

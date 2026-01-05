@@ -141,8 +141,10 @@ describe('TracyInfoPanel', () => {
 
       // Should log error and use empty conversation
       expect(logger.error).toHaveBeenCalledWith(
-        'Failed to parse conversation:',
-        expect.any(Error)
+        expect.objectContaining({
+          error: expect.any(Error),
+        }),
+        'Failed to parse conversation'
       )
 
       expect(infoPanelTemplate).toHaveBeenCalledWith(
