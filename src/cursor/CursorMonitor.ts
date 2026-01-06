@@ -48,9 +48,25 @@ export class CursorMonitor extends BaseMonitor {
 
       logger.info(`${this.name} started successfully`)
     } catch (err) {
-      logger.error({ err }, `Failed to start ${this.name}`)
-      this._isRunning = false
-      throw err
+      // Checkpoint failures during startup are recoverable - start polling anyway
+      // The poll loop will retry and eventually succeed
+      const errMsg = err instanceof Error ? err.message : String(err)
+      if (
+        errMsg.includes('SQLITE_BUSY') ||
+        errMsg.includes('database is locked')
+      ) {
+        logger.warn(
+          { err },
+          `${this.name} initial checkpoint failed, starting polling anyway`
+        )
+        this._isRunning = true
+        this.abortController = new AbortController()
+        this.pollingPromise = this.poll()
+      } else {
+        logger.error({ err }, `Failed to start ${this.name}`)
+        this._isRunning = false
+        throw err
+      }
     }
   }
 
@@ -111,7 +127,17 @@ export class CursorMonitor extends BaseMonitor {
         if (err instanceof Error && err.name === 'AbortError') {
           break
         }
-        logger.error({ err }, `Error in ${this.name} polling`)
+        // Checkpoint failures (e.g., SQLITE_BUSY) are expected when Cursor holds the lock
+        // Log as warning and skip this cycle - will retry on next poll
+        const errMsg = err instanceof Error ? err.message : String(err)
+        if (
+          errMsg.includes('SQLITE_BUSY') ||
+          errMsg.includes('database is locked')
+        ) {
+          logger.warn({ err }, `${this.name} checkpoint failed, skipping cycle`)
+        } else {
+          logger.error({ err }, `Error in ${this.name} polling`)
+        }
         // Continue polling even after errors
       }
     }
