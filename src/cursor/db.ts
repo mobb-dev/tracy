@@ -2,33 +2,82 @@
  * Database module for interacting with Cursor's SQLite database (state.vscdb).
  * This module provides read-only access to Cursor's internal key-value store.
  *
- * Uses sql.js (WASM-based SQLite) for cross-platform compatibility.
- * WAL checkpoint is performed via node:sqlite (Node 22+ built-in) before each
- * read cycle to ensure we have access to the latest data.
+ * Uses Node.js 22+ built-in sqlite module (node:sqlite) for:
+ * - Direct file queries (no memory copy like sql.js)
+ * - Automatic WAL read support (no checkpoint needed)
+ * - Persistent connection with reconnection on error
  */
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 
-import initSqlJs, { Database } from 'sql.js'
 import * as vscode from 'vscode'
 
 import { logger } from '../shared/logger'
-import { checkpoint } from './checkpoint'
 
 /** Cached database path */
 let dbPath: string | null = null
 
-/** Cached sql.js SQL module */
-let SQL: Awaited<ReturnType<typeof initSqlJs>> | null = null
+/** Persistent database connection */
+let db: DatabaseSync | null = null
 
 /**
- * Initialize the database module by storing the path and initializing sql.js.
+ * Get database connection, creating if needed.
+ * Opens with readOnly to allow concurrent access while Cursor has the DB open.
+ *
+ * @returns DatabaseSync connection
+ * @throws Error if dbPath not initialized
+ */
+function getConnection(): DatabaseSync {
+  if (!dbPath) {
+    throw new Error('DB not initialized')
+  }
+
+  if (!db) {
+    db = new DatabaseSync(dbPath, { readOnly: true })
+    logger.debug('[db.ts] Database connection established')
+  }
+  return db
+}
+
+/**
+ * Close current connection (for reconnection on error).
+ */
+function closeConnection(): void {
+  try {
+    db?.close()
+  } catch {
+    // Ignore close errors
+  }
+  db = null
+}
+
+/**
+ * Execute a query with automatic reconnection on error.
+ * If the first attempt fails (e.g., stale connection), closes and retries once.
+ *
+ * @param fn - Function that executes the query
+ * @returns Query result
+ */
+function executeWithReconnect<T>(fn: (conn: DatabaseSync) => T): T {
+  try {
+    return fn(getConnection())
+  } catch (err) {
+    logger.warn({ err }, '[db.ts] Query failed, reconnecting...')
+    closeConnection()
+    // Retry once with fresh connection
+    return fn(getConnection())
+  }
+}
+
+/**
+ * Initialize the database module by storing the path and establishing connection.
  *
  * @param context - VS Code extension context used to locate the database
  */
 export async function initDB(context: vscode.ExtensionContext): Promise<void> {
-  if (dbPath && SQL) {
+  if (dbPath && db) {
     return
   }
 
@@ -39,19 +88,20 @@ export async function initDB(context: vscode.ExtensionContext): Promise<void> {
     throw new Error(`Database file not found: ${dbPath}`)
   }
 
-  // Initialize sql.js WASM module
-  SQL = await initSqlJs()
+  // Establish initial connection
+  getConnection()
 
-  logger.info(`[db.ts] Database initialized: ${dbPath}`)
+  logger.info(
+    `[db.ts] Database initialized: ${dbPath} (Node ${process.version})`
+  )
 }
 
 /**
  * Close the database module.
- * With sql.js, there's no persistent connection to close, just clear cached state.
  */
 export async function closeDB(): Promise<void> {
+  closeConnection()
   dbPath = null
-  // SQL module can be reused, no need to clear it
   logger.info('[db.ts] Database module closed')
 }
 
@@ -75,29 +125,6 @@ function getDatabasePath(context: vscode.ExtensionContext): string {
 }
 
 /**
- * Load the database file into memory and return a sql.js Database instance.
- * Attempts a WAL checkpoint first to ensure latest data is available.
- * If checkpoint fails (e.g., database locked), proceeds with potentially stale data.
- *
- * @returns sql.js Database instance
- * @throws Error if database is not initialized or file cannot be read
- */
-async function loadDatabase(): Promise<Database> {
-  if (!dbPath || !SQL) {
-    throw new Error('DB not initialized')
-  }
-
-  // Attempt WAL checkpoint to flush pending transactions to main DB file
-  // If this fails (e.g., Cursor holds the lock), we proceed with potentially stale data
-  // The next poll cycle will try again
-  checkpoint(dbPath)
-
-  // Read the database file into memory (async to avoid blocking)
-  const buffer = await fs.promises.readFile(dbPath)
-  return new SQL.Database(buffer)
-}
-
-/**
  * Represents a row from the cursorDiskKV table in Cursor's database.
  * The database uses a simple key-value structure for storing state.
  */
@@ -110,8 +137,6 @@ export type DBRow = {
 
 /**
  * Query the SQLite database with LIKE pattern matching.
- *
- * Performs a WAL checkpoint before reading to ensure latest data is available.
  *
  * @param params - Query parameters
  * @param params.key - Key pattern to match (supports SQL LIKE wildcards: % and _)
@@ -141,35 +166,19 @@ export async function getRowsByLike({
     throw new Error('key cannot be null')
   }
 
-  const db = await loadDatabase()
-
-  try {
+  return executeWithReconnect((conn) => {
     const columns = keyOnly ? 'key' : 'key, value'
-    let sql = `SELECT ${columns} FROM cursorDiskKV WHERE key LIKE $key`
-    const params: Record<string, string> = { $key: key }
+    let sql = `SELECT ${columns} FROM cursorDiskKV WHERE key LIKE ?`
+    const params: string[] = [key]
 
     if (value) {
-      sql += ' AND value LIKE $value'
-      params.$value = value
+      sql += ' AND value LIKE ?'
+      params.push(value)
     }
 
-    const stmt = db.prepare(sql)
-    stmt.bind(params)
-
-    const rows: DBRow[] = []
-    while (stmt.step()) {
-      const row = stmt.getAsObject() as DBRow
-      rows.push(row)
-    }
-    stmt.free()
-
-    return rows
-  } catch (err) {
-    logger.error({ err, key, value }, '[db.ts] getRowsByLike query failed')
-    throw err
-  } finally {
-    db.close()
-  }
+    const stmt = conn.prepare(sql)
+    return stmt.all(...params) as DBRow[]
+  })
 }
 
 /**
@@ -199,9 +208,7 @@ const FILE_EDIT_TOOLS = [
  * @returns Array of bubble rows for file edit tools
  */
 export async function getCompletedFileEditBubbles(): Promise<DBRow[]> {
-  const db = await loadDatabase()
-
-  try {
+  return executeWithReconnect((conn) => {
     const placeholders = FILE_EDIT_TOOLS.map(() => '?').join(', ')
 
     const sql = `
@@ -212,21 +219,7 @@ export async function getCompletedFileEditBubbles(): Promise<DBRow[]> {
       .replace(/\n/g, ' ')
       .trim()
 
-    const stmt = db.prepare(sql)
-    stmt.bind(FILE_EDIT_TOOLS)
-
-    const rows: DBRow[] = []
-    while (stmt.step()) {
-      const row = stmt.getAsObject() as DBRow
-      rows.push(row)
-    }
-    stmt.free()
-
-    return rows
-  } catch (err) {
-    logger.error({ err }, '[db.ts] getCompletedFileEditBubbles query failed')
-    throw err
-  } finally {
-    db.close()
-  }
+    const stmt = conn.prepare(sql)
+    return stmt.all(...FILE_EDIT_TOOLS) as DBRow[]
+  })
 }

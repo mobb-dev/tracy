@@ -57,7 +57,7 @@ export class CursorMonitor extends BaseMonitor {
       ) {
         logger.warn(
           { err },
-          `${this.name} initial checkpoint failed, starting polling anyway`
+          `${this.name} initial DB query failed, starting polling anyway`
         )
         this._isRunning = true
         this.abortController = new AbortController()
@@ -134,7 +134,7 @@ export class CursorMonitor extends BaseMonitor {
           errMsg.includes('SQLITE_BUSY') ||
           errMsg.includes('database is locked')
         ) {
-          logger.warn({ err }, `${this.name} checkpoint failed, skipping cycle`)
+          logger.warn({ err }, `${this.name} DB query failed, skipping cycle`)
         } else {
           logger.error({ err }, `Error in ${this.name} polling`)
         }
