@@ -4,10 +4,72 @@ import { GitService } from '../mobbdev_src/features/analysis/scm/services/GitSer
 import { createGQLClient } from './gqlClientFactory'
 import { logger } from './logger'
 
-export enum AppType {
-  CURSOR = 'cursor',
-  VSCODE = 'vscode',
-  UNKNOWN = 'unknown',
+/**
+ * Supported IDE/editor types for tracking and analytics.
+ * Keep in sync with clients/cli/src/mcp/services/types.ts
+ */
+export type IDE =
+  | 'cursor'
+  | 'vscode'
+  | 'windsurf'
+  | 'claude'
+  | 'webstorm'
+  | 'unknown'
+
+/**
+ * AppType enum-like object for backward compatibility.
+ * Provides the same interface as the old enum: AppType.VSCODE, AppType.CURSOR, etc.
+ */
+export const AppType = {
+  CURSOR: 'cursor',
+  VSCODE: 'vscode',
+  WINDSURF: 'windsurf',
+  CLAUDE: 'claude',
+  WEBSTORM: 'webstorm',
+  UNKNOWN: 'unknown',
+} as const
+
+export type AppType = (typeof AppType)[keyof typeof AppType]
+
+/**
+ * Detects the IDE/editor host based on environment variables.
+ * Detection order: Cursor, Windsurf, Claude, WebStorm, VS Code (last since others are forks)
+ * @returns The detected IDE or 'unknown' if no IDE could be detected
+ */
+function detectIDEFromEnv(): IDE {
+  const { env } = process
+
+  // Check specific IDEs first (more specific env vars)
+  if (env['CURSOR_TRACE_ID'] || env['CURSOR_SESSION_ID']) {
+    return 'cursor'
+  }
+  if (env['WINDSURF_IPC_HOOK'] || env['WINDSURF_PID']) {
+    return 'windsurf'
+  }
+  if (env['CLAUDE_DESKTOP'] || env['ANTHROPIC_CLAUDE']) {
+    return 'claude'
+  }
+  if (
+    env['WEBSTORM_VM_OPTIONS'] ||
+    env['IDEA_VM_OPTIONS'] ||
+    env['JETBRAINS_IDE']
+  ) {
+    return 'webstorm'
+  }
+  if (env['VSCODE_IPC_HOOK'] || env['VSCODE_PID']) {
+    return 'vscode'
+  }
+
+  // Fallback to TERM_PROGRAM
+  const termProgram = env['TERM_PROGRAM']?.toLowerCase()
+  if (termProgram === 'windsurf') {
+    return 'windsurf'
+  }
+  if (termProgram === 'vscode') {
+    return 'vscode'
+  }
+
+  return 'unknown'
 }
 
 export type RepositoryInfo = {
@@ -69,7 +131,6 @@ export async function getRepositoryInfo(): Promise<RepositoryInfo | null> {
       return null
     }
 
-    // Detect app type
     const appType = detectAppType()
 
     const repoInfo: RepositoryInfo = {
@@ -92,18 +153,33 @@ export async function getRepositoryInfo(): Promise<RepositoryInfo | null> {
 }
 
 export function detectAppType(): AppType {
-  const appName = vscode.env.appName.toLowerCase()
-  logger.info(`App Name: ${appName}`)
-
-  if (appName.includes('visual studio code')) {
-    return AppType.VSCODE
-  } else if (appName.includes('cursor')) {
-    return AppType.CURSOR
+  // Try environment variable detection first (shared logic with CLI/MCP)
+  const envDetected = detectIDEFromEnv()
+  if (envDetected !== 'unknown') {
+    logger.info(`App detected from env: ${envDetected}`)
+    return envDetected
   }
+
+  // Fall back to vscode.env.appName for VS Code-based editors
+  const appName = vscode.env.appName.toLowerCase()
+  logger.info(`App Name from vscode.env: ${appName}`)
+
+  if (appName.includes('cursor')) {
+    return AppType.CURSOR
+  } else if (appName.includes('windsurf')) {
+    return AppType.WINDSURF
+  } else if (appName.includes('visual studio code')) {
+    return AppType.VSCODE
+  }
+
   logger.warn(`Unknown app: ${appName}`)
   return AppType.UNKNOWN
 }
 
 function getAppBaseUrl(): string {
-  return process.env.APP_BASE_URL || ''
+  const baseUrl = process.env.APP_BASE_URL
+  if (!baseUrl) {
+    logger.warn('APP_BASE_URL environment variable not set, using empty string')
+  }
+  return baseUrl ?? ''
 }
