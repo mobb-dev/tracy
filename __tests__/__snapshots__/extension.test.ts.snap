@@ -22,6 +22,7 @@ exports[`extension tests > 'full database scenario with thinking …' > full-thi
 exports[`extension tests > 'full database scenario with thinking …' > full-thinking-state.vscdb-uploadAiBlame-call-0 1`] = `
 [
   {
+    "apiUrl": "https://api.mobb.ai/v1/graphql",
     "blameType": "CHAT",
     "inference": "This is a random file created at the repository root!
 
@@ -119,6 +120,7 @@ Creating a simple random file in the repo root:
     "responseTime": "2025-11-05T12:11:37.908Z",
     "sessionId": "59ce5fe8-21af-47bd-8ace-eedc0956072b",
     "tool": "Cursor",
+    "webAppUrl": "https://app.mobb.ai",
   },
 ]
 `;
@@ -301,6 +303,7 @@ exports[`extension tests > 'full database scenario without thinki…' > full-sta
 exports[`extension tests > 'full database scenario without thinki…' > full-state.vscdb-uploadAiBlame-call-0 1`] = `
 [
   {
+    "apiUrl": "https://api.mobb.ai/v1/graphql",
     "blameType": "CHAT",
     "inference": "This is a sample file.
 You can use this as a template or example.",
@@ -379,6 +382,7 @@ You can use this as a template or example.",
     "responseTime": "2025-10-29T10:58:13.176Z",
     "sessionId": "5ab4c616-183d-498c-a65c-7a2935a9f46c",
     "tool": "Cursor",
+    "webAppUrl": "https://app.mobb.ai",
   },
 ]
 `;

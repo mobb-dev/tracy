@@ -78,7 +78,8 @@ export async function activate(context: vscode.ExtensionContext) {
             vscode.window
               .showInformationMessage(
                 'Mobb AI Tracer configuration changed. Reload window for changes to take effect.',
-                'Reload Window'
+                'Reload Window',
+                'Later'
               )
               .then((selection) => {
                 if (selection === 'Reload Window') {

@@ -6,6 +6,13 @@ import { uploadHumanChangesFromExtension } from '../src/human/uploader'
 
 vi.mock('vscode', () => ({}))
 
+vi.mock('../src/shared/config', () => ({
+  getConfig: vi.fn().mockReturnValue({
+    apiUrl: 'https://api.mobb.ai/v1/graphql',
+    webAppUrl: 'https://app.mobb.ai',
+  }),
+}))
+
 vi.mock('../src/mobbdev_src/args/commands/upload_ai_blame', () => ({
   uploadAiBlameHandlerFromExtension: vi.fn().mockResolvedValue({
     promptsCounts: {

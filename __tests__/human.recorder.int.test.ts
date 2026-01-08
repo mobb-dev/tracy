@@ -44,6 +44,13 @@ vi.mock('../src/shared/logger', () => ({
   },
 }))
 
+vi.mock('../src/shared/config', () => ({
+  getConfig: vi.fn().mockReturnValue({
+    apiUrl: 'https://api.mobb.ai/v1/graphql',
+    webAppUrl: 'https://app.mobb.ai',
+  }),
+}))
+
 vi.mock('../src/human/config', async () => {
   const cfg = await vi.importActual<typeof import('../src/human/config')>(
     '../src/human/config'

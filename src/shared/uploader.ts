@@ -8,6 +8,7 @@ import {
 } from '../mobbdev_src/args/commands/upload_ai_blame'
 import { AiBlameInferenceType } from '../mobbdev_src/features/analysis/scm/generates/client_generates'
 import { detectMCPServers } from '../mobbdev_src/mcp'
+import { getConfig } from './config'
 import { createGQLClient } from './gqlClientFactory'
 import { logger } from './logger'
 
@@ -116,6 +117,11 @@ export async function uploadCursorChanges(changes: ProcessedChange[]) {
     const inference = change.additions
 
     try {
+      const config = getConfig()
+      logger.info('Starting upload to backend...', {
+        apiUrl: config.apiUrl,
+        webAppUrl: config.webAppUrl,
+      })
       const result: UploadAiBlameResult =
         await uploadAiBlameHandlerFromExtension({
           prompts,
@@ -125,7 +131,11 @@ export async function uploadCursorChanges(changes: ProcessedChange[]) {
           responseTime: change.createdAt.toISOString(),
           blameType: change.type,
           sessionId: change.composerId,
+          apiUrl: config.apiUrl,
+          webAppUrl: config.webAppUrl,
         })
+
+      logger.info('Upload completed successfully')
 
       // Log sanitization counts with metadata
       logger.info(
@@ -162,6 +172,11 @@ export async function uploadCopilotChanges(
   logger.info(`Uploading Copilot changes`)
 
   try {
+    const config = getConfig()
+    logger.info('Starting Copilot upload to backend...', {
+      apiUrl: config.apiUrl,
+      webAppUrl: config.webAppUrl,
+    })
     const result: UploadAiBlameResult = await uploadAiBlameHandlerFromExtension(
       {
         prompts,
@@ -170,6 +185,8 @@ export async function uploadCopilotChanges(
         tool: 'Copilot',
         responseTime,
         blameType,
+        apiUrl: config.apiUrl,
+        webAppUrl: config.webAppUrl,
       }
     )
 

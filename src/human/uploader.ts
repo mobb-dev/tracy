@@ -4,6 +4,7 @@ import {
   type UploadAiBlameResult,
 } from '../mobbdev_src/args/commands/upload_ai_blame'
 import { AiBlameInferenceType } from '../mobbdev_src/features/analysis/scm/generates/client_generates'
+import { getConfig } from '../shared/config'
 import { logger } from '../shared/logger'
 import { AppType } from '../shared/repositoryInfo'
 import {
@@ -38,6 +39,11 @@ export async function uploadHumanChangesFromExtension(
   const artifacts = buildHumanUploadArtifact(segment)
 
   try {
+    const config = getConfig()
+    logger.info('Starting human changes upload to backend...', {
+      apiUrl: config.apiUrl,
+      webAppUrl: config.webAppUrl,
+    })
     const result: UploadAiBlameResult = await uploadAiBlameHandlerFromExtension(
       {
         prompts: artifacts.prompts,
@@ -46,6 +52,8 @@ export async function uploadHumanChangesFromExtension(
         tool: artifacts.tool,
         responseTime: new Date().toISOString(),
         blameType: AiBlameInferenceType.HumanEdit,
+        apiUrl: config.apiUrl,
+        webAppUrl: config.webAppUrl,
       }
     )
 
