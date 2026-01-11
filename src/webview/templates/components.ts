@@ -1,6 +1,6 @@
 import escapeHtml from 'escape-html'
 
-import { AppType, detectAppType } from '../../shared/repositoryInfo'
+import { PromptSummary } from '../../ui/AIBlameCache'
 import { html } from './html'
 
 export function timeAgo(dateStr: string): string {
@@ -40,13 +40,24 @@ export function timeAgo(dateStr: string): string {
 
 export const fileHeader = (
   fileName: string,
-  lineNumber: number
+  lineNumber: number,
+  showContinueButton: boolean
 ): string => html`
-  <h2>Tracy AI Information</h2>
+  <div
+    style="display: flex; align-items: center; justify-content: space-between;"
+  >
+    <h2 style="margin: 0;">Tracy AI Information</h2>
+    <div class="file-header-actions" style="margin-left: auto;">
+      ${showContinueButton
+        ? html`<button id="continue-conversation-btn" style="float: right;">
+            Continue Conversation
+          </button>`
+        : ''}
+    </div>
+  </div>
   <div class="file-info">
     <strong>${escapeHtml(fileName)}</strong> &bull; Line ${lineNumber}
   </div>
-  <hr />
 `
 
 export const metaInfo = (
@@ -73,7 +84,117 @@ export const metaInfo = (
       <span class="meta-item">${safeToolName}</span>
       ${commitDisplay}
     </div>
+    <hr />
   `
+}
+
+export const conversationSummarySection = (
+  summary: PromptSummary | undefined,
+  summaryState: 'IDLE' | 'LOADING' | 'SUCCESS' | 'ERROR',
+  summaryError?: string
+): string => {
+  if (summaryState === 'LOADING') {
+    return html` <h3>Conversation Summary</h3>
+      <div class="conversation-loading">
+        <div class="spinner"></div>
+        <span>Loading summary...</span>
+      </div>`
+  }
+
+  if (summaryState === 'ERROR') {
+    const errorMessage = summaryError || 'Failed to load summary'
+    return html` <h3>Conversation Summary</h3>
+      <div class="conversation-error">
+        <span>${escapeHtml(errorMessage)}</span>
+      </div>`
+  }
+
+  if (summaryState === 'SUCCESS' && summary) {
+    if (typeof summary === 'object') {
+      const s = summary as PromptSummary
+      // Collapsible section for developersPlan and importantInstructionsAndPushbacks
+      return html`<h3>Conversation Summary</h3>
+        <div class="conversation-summary">
+          <section class="summary-block">
+            <h4 class="summary-title">Goal</h4>
+            <p class="summary-text">${escapeHtml(s.goal)}</p>
+          </section>
+          <section class="collapsible-section">
+            <button
+              type="button"
+              class="collapsible-header"
+              data-collapsible
+              aria-expanded="false"
+            >
+              <span class="arrow">▼</span>
+              <h4 class="collapsible-title">Developers Plan</h4>
+            </button>
+            <div
+              class="collapsible-content is-collapsed"
+              data-collapsible-content
+            >
+              <ul class="summary-list">
+                ${Array.isArray(s.developersPlan) && s.developersPlan.length
+                  ? s.developersPlan
+                      .map((i) => html`<li>${escapeHtml(i)}</li>`)
+                      .join('')
+                  : html`<li><em>No plan provided</em></li>`}
+              </ul>
+            </div>
+          </section>
+          <section class="collapsible-section">
+            <button
+              type="button"
+              class="collapsible-header"
+              data-collapsible
+              aria-expanded="false"
+            >
+              <span class="arrow" aria-hidden="true">▼</span>
+              <h4 class="collapsible-title">AI Implementation Details</h4>
+            </button>
+            <div
+              class="collapsible-content is-collapsed"
+              data-collapsible-content
+            >
+              <p class="summary-text">
+                ${escapeHtml(s.aiImplementationDetails)}
+              </p>
+            </div>
+          </section>
+
+          <section class="collapsible-section">
+            <button
+              type="button"
+              class="collapsible-header"
+              data-collapsible
+              aria-expanded="false"
+            >
+              <span class="arrow">▼</span>
+              <h4 class="collapsible-title">
+                Important Instructions & Pushbacks
+              </h4>
+            </button>
+            <div
+              class="collapsible-content is-collapsed"
+              data-collapsible-content
+            >
+              <ul class="summary-list">
+                ${Array.isArray(s.importantInstructionsAndPushbacks) &&
+                s.importantInstructionsAndPushbacks.length > 0
+                  ? s.importantInstructionsAndPushbacks
+                      .map((item) => html`<li>${escapeHtml(item)}</li>`)
+                      .join('')
+                  : html`<li><em>None</em></li>`}
+              </ul>
+            </div>
+          </section>
+        </div>
+        <hr />`
+    }
+  }
+
+  // No summary data available
+  return ''
 }
 
 export const conversationMessage = (message: {
@@ -137,12 +258,9 @@ export const conversationSection = (
         <div class="conversation">
           ${normalized.map(conversationMessage).join('')}
         </div>`
-      const buttonPart = html` <div class="action-buttons">
-        <button id="continue-conversation-btn">Continue Conversation</button>
-      </div>`
       // The current button action code only works in VSCode. Need to research and implement another mechanism for Cursor
-      const shouldShowContinueButton = detectAppType() === AppType.VSCODE
-      return conversationPart + (shouldShowContinueButton ? buttonPart : '')
+      // The continue button is now in the file header
+      return conversationPart
     }
   }
 

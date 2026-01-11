@@ -105,7 +105,11 @@ function setupView(context: vscode.ExtensionContext): void {
     logger.error('Repository info is not available for view setup')
     return
   }
-  aiBlameCache = new AIBlameCache(repoInfo.gitRepoUrl, repoInfo.organizationId)
+  aiBlameCache = new AIBlameCache(
+    repoInfo.gitRepoUrl,
+    repoInfo.organizationId,
+    repoInfo.gitRoot
+  )
   gitBlameCache = new GitBlameCache(
     repoInfo.gitRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ''
   )

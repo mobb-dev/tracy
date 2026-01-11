@@ -1,4 +1,4 @@
-import type { AIBlameAttribution } from '../ui/AIBlameCache'
+import type { AIBlameAttribution, PromptSummary } from '../ui/AIBlameCache'
 
 export type WebviewContext = {
   nonce: string
@@ -12,6 +12,9 @@ export type InfoPanelData = {
   conversation: Array<{ type: string; text: string; date: string }>
   conversationState: 'IDLE' | 'LOADING' | 'SUCCESS' | 'ERROR'
   conversationError?: string
+  conversationSummary?: PromptSummary
+  conversationSummaryState: 'IDLE' | 'LOADING' | 'SUCCESS' | 'ERROR'
+  conversationSummaryError?: string
   blameInfoState: 'IDLE' | 'LOADING' | 'SUCCESS' | 'ERROR'
   blameInfoError?: string
 }

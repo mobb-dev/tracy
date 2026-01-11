@@ -4,8 +4,14 @@ import {
   AnalyzeCommitForExtensionAiBlameMutationVariables,
   Blame_Ai_Analysis_Request_State_Enum,
   GetAiBlameAttributionPromptQueryVariables,
+  GetPromptSummaryQueryVariables,
+  Status,
   StreamBlameAiAnalysisRequestsDocument,
 } from '../mobbdev_src/features/analysis/scm/generates/client_generates'
+import {
+  GitService,
+  LocalCommitData,
+} from '../mobbdev_src/features/analysis/scm/services/GitService'
 import { configStore } from '../mobbdev_src/utils/ConfigStoreService'
 import { subscribeToBlameAiAnalysisRequests } from '../mobbdev_src/utils/subscribe/subscribe'
 import { getConfig } from '../shared/config'
@@ -24,6 +30,19 @@ export type AIBlameAttribution = {
   type: AiBlameInferenceType
 }
 
+export type frictionScore = {
+  score: number
+  justification: string
+}
+
+export type PromptSummary = {
+  goal: string
+  developersPlan: string[]
+  aiImplementationDetails: string
+  importantInstructionsAndPushbacks: string[]
+  frictionScore: frictionScore
+}
+
 export type AIBlameAttributionList = AIBlameAttribution[]
 
 // Simple size-capped cache using Map (preserves insertion order for eviction)
@@ -33,12 +52,19 @@ const MAX_PROMPT_CACHE_SIZE = 50
 export class AIBlameCache {
   private attributionCache = new Map<string, AIBlameAttributionList>()
   private promptCache = new Map<string, string>()
+  private promptSummaryCache = new Map<string, PromptSummary>()
   private pending: Record<string, Promise<AIBlameAttributionList | null>> = {}
+  private gitService: GitService | null = null
 
   constructor(
     private repoUrl: string,
-    private organizationId: string
-  ) {}
+    private organizationId: string,
+    private gitRoot?: string
+  ) {
+    if (gitRoot) {
+      this.gitService = new GitService(gitRoot)
+    }
+  }
 
   private matchesFilePath(
     filePath: string,
@@ -153,6 +179,35 @@ export class AIBlameCache {
     }
   }
 
+  async getAIBlamePromptSummary(
+    attributionId: string
+  ): Promise<PromptSummary | null> {
+    // Return from cache if present
+    if (this.promptSummaryCache.has(attributionId)) {
+      return this.promptSummaryCache.get(attributionId)!
+    }
+
+    try {
+      const promptSummary = await GetAiBlamePromptSummary(attributionId)
+      if (promptSummary) {
+        this.setCached(
+          this.promptSummaryCache,
+          attributionId,
+          promptSummary,
+          MAX_PROMPT_CACHE_SIZE
+        )
+        return promptSummary
+      }
+    } catch (error) {
+      logger.error(
+        { error, attributionId },
+        `AIBlameCache: Failed to get prompt for attribution ${attributionId}`
+      )
+      return null
+    }
+    return null
+  }
+
   // Set a value in the cache, evicting oldest entries if needed
   private setCached<T>(
     cache: Map<string, T>,
@@ -178,14 +233,35 @@ export class AIBlameCache {
       return null
     }
 
-    logger.info(`AIBlameCache: Analyzing commit ${commitSha}`)
+    logger.debug(`AIBlameCache: Analyzing commit ${commitSha}`)
 
     try {
+      // Try to get local commit data first (allows skipping SCM token requirement)
+      let localCommitData: LocalCommitData | undefined
+
+      if (this.gitService) {
+        try {
+          const localData = await this.gitService.getLocalCommitData(commitSha)
+          if (localData) {
+            localCommitData = localData
+            logger.debug(
+              `AIBlameCache: Using local commit data for ${commitSha} (diff size: ${localData.diff.length} bytes)`
+            )
+          }
+        } catch (error) {
+          logger.warn(
+            { error, commitSha },
+            'AIBlameCache: Failed to get local commit data, will use server-side fetch'
+          )
+        }
+      }
+
       // First, initiate the analysis
       const result = await analyzeCommitForExtensionAIBlameWrapper(
         commitSha,
         this.organizationId,
-        this.repoUrl
+        this.repoUrl,
+        localCommitData
       )
 
       const response = result.analyzeCommitForAIBlame
@@ -377,6 +453,7 @@ export class AIBlameCache {
     this.attributionCache.clear()
     this.pending = {}
     this.promptCache.clear()
+    this.promptSummaryCache.clear()
   }
 
   dispose(): void {
@@ -387,24 +464,38 @@ export class AIBlameCache {
 export async function analyzeCommitForExtensionAIBlameWrapper(
   commitSha: string,
   organizationId: string,
-  repositoryURL: string
+  repositoryURL: string,
+  localCommitData?: LocalCommitData
 ): Promise<AnalyzeCommitForExtensionAiBlameMutation> {
   try {
-    logger.info('Authenticating for AI Blame commit analysis')
+    logger.debug('Authenticating for AI Blame commit analysis')
     const gqlClient = await createGQLClient()
 
-    logger.info(
-      `Analyzing commit for AI Blame: sha=${commitSha}, org=${organizationId}, repo=${repositoryURL}`
+    logger.debug(
+      {
+        commitSha,
+        organizationId,
+        repositoryURL,
+        hasLocalData: !!localCommitData,
+      },
+      'Analyzing commit for AI Blame'
     )
 
     const variables: AnalyzeCommitForExtensionAiBlameMutationVariables = {
       commitSha,
       organizationId,
       repositoryURL,
+      // Include local commit data if available (allows skipping SCM token)
+      commitDiff: localCommitData?.diff,
+      commitTimestamp: localCommitData?.timestamp.toISOString(),
+      parentCommits: localCommitData?.parentCommits?.map((p) => ({
+        sha: p.sha,
+        timestamp: p.timestamp.toISOString(),
+      })),
     }
 
     const result = await gqlClient.analyzeCommitForExtensionAIBlame(variables)
-    logger.info({ result }, 'AI Blame commit analysis result')
+    logger.debug({ result }, 'AI Blame commit analysis result')
 
     return result
   } catch (err) {
@@ -450,4 +541,42 @@ export async function GetAiBlamePrompt(
     logger.error({ error: err }, 'Error during GetAiBlameAttributionPrompt')
     return null
   }
+}
+
+export async function GetAiBlamePromptSummary(
+  attributionId: string
+): Promise<PromptSummary | null> {
+  try {
+    const gqlClient = await createGQLClient()
+    const variables: GetPromptSummaryQueryVariables = {
+      aiBlameAttributionId: attributionId,
+    }
+    const result = await gqlClient.getAIBlameAttributionPromptSummary(variables)
+
+    if (!result) {
+      logger.error(
+        `AIBlameCache: No response for attributionId ${attributionId}`
+      )
+      return null
+    }
+    const response = result.getPromptSummary
+    if (response.__typename === 'PromptSummaryError') {
+      logger.error(
+        `AIBlameCache: Error getting prompt summary ${attributionId}: ${response.error}`
+      )
+      return null
+    }
+
+    if (response.__typename === 'PromptSummarySuccess') {
+      if (response.status == Status.Ok) {
+        return response.summary
+      }
+    }
+  } catch (err) {
+    logger.error(
+      { error: err },
+      'Error during GetAiBlameAttributionPromptSummary'
+    )
+  }
+  return null
 }

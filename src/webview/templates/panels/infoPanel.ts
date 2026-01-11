@@ -1,8 +1,10 @@
+import { AppType, detectAppType } from '../../../shared/repositoryInfo'
 import type { InfoPanelData, WebviewContext } from '../../types'
 import { baseLayout } from '../base'
 import {
   blameInfoSection,
   conversationSection,
+  conversationSummarySection,
   fileHeader,
   metaInfo,
   noAttributeInfo,
@@ -21,11 +23,24 @@ export const infoPanelTemplate = (
     conversation,
     conversationState,
     conversationError,
+    conversationSummary,
+    conversationSummaryState,
+    conversationSummaryError,
     blameInfoState,
     blameInfoError,
   } = data
 
-  let body = fileHeader(fileName, lineNumber)
+  let body = ''
+  if (
+    attribution &&
+    attribution.type === 'CHAT' &&
+    conversationState === 'SUCCESS' &&
+    detectAppType() === AppType.VSCODE
+  ) {
+    body = fileHeader(fileName, lineNumber, true)
+  } else {
+    body = fileHeader(fileName, lineNumber, false)
+  }
 
   // Handle blame info loading states first
   const blameInfoLoadingContent = blameInfoSection(
@@ -63,6 +78,11 @@ export const infoPanelTemplate = (
     )
 
     if (attribution.type === 'CHAT') {
+      body += conversationSummarySection(
+        conversationSummary,
+        conversationSummaryState,
+        conversationSummaryError
+      )
       body += conversationSection(
         conversation,
         conversationState,
@@ -85,7 +105,27 @@ export const infoPanelTemplate = (
         vscode.postMessage({ command: 'openCommitOnGitHub', url: url })
       }
 
-      // Add event listeners when DOM is ready
+      function wireCollapsibles(root = document) {
+        root.querySelectorAll('[data-collapsible]').forEach((header) => {
+          // avoid double-binding if your webview re-renders content
+          if (header.dataset.wired === 'true') return
+          header.dataset.wired = 'true'
+
+          header.addEventListener('click', () => {
+            const content = header.nextElementSibling
+            if (!content) return
+
+            const expanded = header.getAttribute('aria-expanded') === 'true'
+            header.setAttribute('aria-expanded', expanded ? 'false' : 'true')
+            if (content.classList.contains('is-collapsed')) {
+              content.classList.remove('is-collapsed')
+            } else {
+              content.classList.add('is-collapsed')
+            }
+          })
+        })
+      }
+
       document.addEventListener('DOMContentLoaded', () => {
         // For continue conversation button
         const continueBtn = document.getElementById('continue-conversation-btn')
@@ -107,6 +147,7 @@ export const infoPanelTemplate = (
             }
           })
         })
+        wireCollapsibles()
       })
     </script>
   `

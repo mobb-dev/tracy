@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { EXTENSION_NAME } from '../env'
 import { logger } from '../shared/logger'
 import { infoPanelTemplate } from '../webview/templates/panels/infoPanel'
-import { AIBlameAttribution, AIBlameCache } from './AIBlameCache'
+import { AIBlameAttribution, AIBlameCache, PromptSummary } from './AIBlameCache'
 
 export type TracyPanelContext = {
   fileName: string
@@ -35,6 +35,7 @@ const ConversationSchema = z.array(z.unknown()).transform((messages) =>
 )
 
 type ConversationLoadingState = 'IDLE' | 'LOADING' | 'SUCCESS' | 'ERROR'
+type ConversationSummaryLoadingState = 'IDLE' | 'LOADING' | 'SUCCESS' | 'ERROR'
 type BlameInfoLoadingState = 'IDLE' | 'LOADING' | 'SUCCESS' | 'ERROR'
 
 export class InfoPanel implements vscode.Disposable {
@@ -45,7 +46,12 @@ export class InfoPanel implements vscode.Disposable {
 
   // panel-owned state
   private promptContent?: string
-  private cachedAttributionId?: string
+  // Separate cache keys to avoid race conditions when loading concurrently
+  private cachedSummaryAttributionId?: string
+  private cachedPromptAttributionId?: string
+  private conversationSummaryContent?: PromptSummary
+  private conversationSummaryState: ConversationSummaryLoadingState = 'IDLE'
+  private conversationSummaryError?: string
   private conversationState: ConversationLoadingState = 'IDLE'
   private conversationError?: string
   private blameInfoState: BlameInfoLoadingState = 'IDLE'
@@ -81,6 +87,77 @@ export class InfoPanel implements vscode.Disposable {
     // Refresh to load data and show content
     await this.refresh()
   }
+  private async autoLoadConversationSummary(version: number): Promise<void> {
+    const ctx = this.getCtx()
+    const { attribution } = ctx
+    if (!attribution) {
+      // Check version before applying changes
+      if (version !== this.dataLoadVersion) {
+        return
+      }
+
+      this.conversationSummaryState = 'IDLE'
+      this.conversationSummaryContent = undefined
+      this.cachedSummaryAttributionId = undefined
+      this.conversationSummaryError = undefined
+      return
+    }
+
+    // Skip if already loaded for this attribution
+    if (
+      this.conversationSummaryContent &&
+      this.cachedSummaryAttributionId === attribution.id
+    ) {
+      return
+    }
+
+    // Clear cached data if attribution changed
+    if (
+      this.cachedSummaryAttributionId &&
+      this.cachedSummaryAttributionId !== attribution.id
+    ) {
+      this.conversationSummaryContent = undefined
+      this.conversationSummaryError = undefined
+    }
+
+    // Set loading state
+    if (version !== this.dataLoadVersion) {
+      return
+    }
+    this.conversationSummaryState = 'LOADING'
+    this.cachedSummaryAttributionId = attribution.id
+
+    try {
+      const promptSummary = await this.aiBlameCache.getAIBlamePromptSummary(
+        attribution.id
+      )
+
+      // Check version before applying results
+      if (version !== this.dataLoadVersion) {
+        return
+      }
+
+      if (promptSummary) {
+        this.conversationSummaryContent = promptSummary
+        this.conversationSummaryState = 'SUCCESS'
+        this.conversationSummaryError = undefined
+      } else {
+        this.conversationSummaryContent = undefined
+        this.conversationSummaryState = 'ERROR'
+        this.conversationSummaryError = 'No conversation data available'
+      }
+    } catch (error) {
+      // Check version before applying error state
+      if (version !== this.dataLoadVersion) {
+        return
+      }
+
+      logger.error({ error }, 'Failed to auto-load conversation')
+      this.conversationSummaryState = 'ERROR'
+      this.conversationSummaryError = 'Loading AI conversation failed'
+      this.conversationSummaryContent = undefined
+    }
+  }
 
   private async autoLoadConversation(version: number): Promise<void> {
     const ctx = this.getCtx()
@@ -93,20 +170,23 @@ export class InfoPanel implements vscode.Disposable {
 
       this.conversationState = 'IDLE'
       this.promptContent = undefined
-      this.cachedAttributionId = undefined
+      this.cachedPromptAttributionId = undefined
       this.conversationError = undefined
       return
     }
 
     // Skip if already loaded for this attribution
-    if (this.promptContent && this.cachedAttributionId === attribution.id) {
+    if (
+      this.promptContent &&
+      this.cachedPromptAttributionId === attribution.id
+    ) {
       return
     }
 
     // Clear cached data if attribution changed
     if (
-      this.cachedAttributionId &&
-      this.cachedAttributionId !== attribution.id
+      this.cachedPromptAttributionId &&
+      this.cachedPromptAttributionId !== attribution.id
     ) {
       this.promptContent = undefined
       this.conversationError = undefined
@@ -117,7 +197,7 @@ export class InfoPanel implements vscode.Disposable {
       return
     }
     this.conversationState = 'LOADING'
-    this.cachedAttributionId = attribution.id
+    this.cachedPromptAttributionId = attribution.id
 
     try {
       const promptContent = await this.aiBlameCache.getAIBlamePrompt(
@@ -174,8 +254,11 @@ export class InfoPanel implements vscode.Disposable {
     // Increment version for this data loading operation
     const currentVersion = ++this.dataLoadVersion
 
-    // Load conversation data first
-    await this.autoLoadConversation(currentVersion)
+    // Load summary and conversation data concurrently
+    await Promise.all([
+      this.autoLoadConversationSummary(currentVersion),
+      this.autoLoadConversation(currentVersion),
+    ])
 
     // Check if this version is still current after async loading
     if (currentVersion !== this.dataLoadVersion) {
@@ -191,6 +274,8 @@ export class InfoPanel implements vscode.Disposable {
 
     // Parse conversation from promptContent
     const conversation = this.parseConversation(this.promptContent) ?? []
+    // Get summary content
+    const conversationSummary = this.conversationSummaryContent
 
     this.panel.webview.html = infoPanelTemplate(
       { nonce: randomBytes(16).toString('hex') },
@@ -202,6 +287,9 @@ export class InfoPanel implements vscode.Disposable {
         conversation,
         conversationState: this.conversationState,
         conversationError: this.conversationError,
+        conversationSummary,
+        conversationSummaryState: this.conversationSummaryState,
+        conversationSummaryError: this.conversationSummaryError,
         blameInfoState: this.blameInfoState,
         blameInfoError: this.blameInfoError,
       }

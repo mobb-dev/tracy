@@ -24,6 +24,7 @@ vi.mock('../src/shared/gqlClientFactory', () => ({
 vi.mock('../src/shared/logger', () => ({
   logger: {
     info: vi.fn(),
+    debug: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
   },

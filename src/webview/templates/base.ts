@@ -155,6 +155,16 @@ export const baseLayout = (
           border-radius: 8px;
           color: var(--vscode-inputValidation-errorForeground);
         }
+        .collapsible-header {
+          all: unset;
+          cursor: pointer;
+          display: flex;
+          gap: 0.5em;
+          align-items: center;
+        }
+        .collapsible-content.is-collapsed {
+          display: none;
+        }
         .blame-info-loading {
           display: flex;
           align-items: center;
@@ -180,6 +190,70 @@ export const baseLayout = (
           border-top: 2px solid var(--vscode-focusBorder);
           border-radius: 50%;
           animation: spin 1s linear infinite;
+        }
+        .conversation-summary h3,
+        .conversation-summary h4 {
+          margin: 0;
+          padding: 0;
+          line-height: 1.25;
+        }
+        .summary-text {
+          margin: 0.2em 0 0;
+          opacity: 0.9;
+          line-height: 1.4;
+        }
+        .summary-list {
+          margin: 0;
+          padding-left: 1.1em; /* bullet distance */
+        }
+        .summary-list li {
+          margin: 0.2em 0;
+          line-height: 1.4;
+        }
+        .summary-block,
+        .collapsible-section {
+          padding: 0.4em 0;
+          margin: 0;
+        }
+        .collapsible-title {
+          display: inline;
+          margin: 0;
+          padding: 0;
+          font-weight: 600;
+          line-height: 1.2;
+        }
+        .collapsible-header {
+          appearance: none;
+          background: transparent !important;
+          border: none;
+          box-shadow: none;
+          padding: 0.2em 0;
+          width: 100%;
+          text-align: left;
+          cursor: pointer;
+          color: var(--vscode-foreground);
+        }
+        .collapsible-header:focus,
+        .collapsible-header:active,
+        .collapsible-header:focus-visible {
+          outline: none;
+          background: transparent !important;
+        }
+        .collapsible-header::selection,
+        .collapsible-header *::selection {
+          background: transparent;
+        }
+        .collapsible-header .arrow {
+          transition: transform 120ms ease;
+        }
+        .collapsible-header[aria-expanded='false'] .arrow {
+          transform: rotate(-90deg);
+        }
+        .collapsible-header[aria-expanded='true'] .arrow {
+          transform: rotate(0deg);
+        }
+        .collapsible-content.is-collapsed {
+          display: none;
         }
         @keyframes spin {
           0% {
