@@ -1,4 +1,3 @@
-import { AppType, detectAppType } from '../../../shared/repositoryInfo'
 import type { InfoPanelData, WebviewContext } from '../../types'
 import { baseLayout } from '../base'
 import {
@@ -34,8 +33,7 @@ export const infoPanelTemplate = (
   if (
     attribution &&
     attribution.type === 'CHAT' &&
-    conversationState === 'SUCCESS' &&
-    detectAppType() === AppType.VSCODE
+    conversationState === 'SUCCESS'
   ) {
     body = fileHeader(fileName, lineNumber, true)
   } else {
