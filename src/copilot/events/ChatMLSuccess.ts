@@ -284,6 +284,29 @@ export class ChatMLSuccess {
     return result
   }
 
+  /** Returns all tool calls found in the messages (for debugging) */
+  getAllToolCalls(): Array<{ id: string; name: string }> {
+    const out: Array<{ id: string; name: string }> = []
+    const messages = this.getMessages()
+    if (!Array.isArray(messages)) {
+      return out
+    }
+    for (const m of messages) {
+      const tcs = m?.toolCalls as ChatMLToolCall[] | undefined
+      if (!Array.isArray(tcs)) {
+        continue
+      }
+      for (const tc of tcs) {
+        const fname = tc?.function?.name
+        const id = tc?.id
+        if (typeof fname === 'string' && typeof id === 'string' && id) {
+          out.push({ id, name: fname })
+        }
+      }
+    }
+    return out
+  }
+
   /** Returns all tool call ids whose function.name is in names (order preserved) */
   getToolCallIds(names: string[]): string[] {
     const out: string[] = []

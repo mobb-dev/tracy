@@ -1,0 +1,6 @@
+node_modules
+.git
+*.log
+test-results
+*.vsix
+.DS_Store

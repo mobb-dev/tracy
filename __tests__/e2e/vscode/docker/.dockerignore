@@ -1,0 +1,21 @@
+# Node modules (will be installed in container)
+node_modules/
+
+# Test results (mounted as volume)
+test-results/
+
+# Local dev files
+*.log
+.DS_Store
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+
+# Temporary files
+*.tmp
+*.temp

@@ -25,16 +25,51 @@ vi.mock('@vscode/sqlite3', () => ({
 vi.mock('vscode', () => {
   return {
     workspace: {
-      workspaceFolders: [],
+      workspaceFolders: [
+        {
+          uri: { fsPath: '/test/workspace' },
+          name: 'test-workspace',
+          index: 0,
+        },
+      ],
       getConfiguration: vi.fn(() => ({
         inspect: vi.fn(() => ({
           workspaceValue: undefined,
           globalValue: undefined,
         })),
       })),
+      onDidChangeConfiguration: undefined, // Checked in extension.ts line 82
     },
     env: {
       appName: 'cursor',
+    },
+    window: {
+      createStatusBarItem: vi.fn(() => ({
+        show: vi.fn(),
+        hide: vi.fn(),
+        dispose: vi.fn(),
+        text: '',
+        tooltip: '',
+        command: '',
+      })),
+      showInformationMessage: vi.fn(),
+    },
+    StatusBarAlignment: {
+      Right: 2,
+      Left: 1,
+    },
+    commands: {
+      registerCommand: vi.fn(),
+      executeCommand: vi.fn(),
+    },
+    Uri: {
+      file: vi.fn((path: string) => ({ fsPath: path })),
+      parse: vi.fn((path: string) => ({ fsPath: path })),
+    },
+    EventEmitter: class {
+      fire = vi.fn()
+      event = vi.fn()
+      dispose = vi.fn()
     },
   }
 })
@@ -96,6 +131,11 @@ vi.mock('../src/mobbdev_src/features/analysis/graphql', () => ({
   GQLClient: vi.fn().mockImplementation(() => createMockGQLClient()),
 }))
 
+// Mock gqlClientFactory
+vi.mock('../src/shared/gqlClientFactory', () => ({
+  createGQLClient: vi.fn(async () => createMockGQLClient()),
+}))
+
 // Mock handleMobbLogin
 vi.mock('../src/mobbdev_src/commands', () => ({
   handleMobbLogin: vi.fn(async ({ inGqlClient }) => inGqlClient),
@@ -133,6 +173,85 @@ vi.mock('../src/cursor/db', () => ({
   getRowsByLike: (params: { key: string; value?: string; keyOnly?: boolean }) =>
     getRowsByLikeMock(params),
   getCompletedFileEditBubbles: () => getCompletedFileEditBubblesMock(),
+}))
+
+// Mock repositoryInfo to return valid test data
+vi.mock('../src/shared/repositoryInfo', async () => {
+  const actual = await vi.importActual<
+    typeof import('../src/shared/repositoryInfo')
+  >('../src/shared/repositoryInfo')
+  return {
+    ...actual,
+    getRepositoryInfo: vi.fn(async () => ({
+      gitRepoUrl: 'https://github.com/test/repo.git',
+      gitRoot: '/test/workspace',
+      userEmail: 'test@example.com',
+      organizationId: 'test-org-id',
+      appType: 'cursor',
+      mobbAppBaseUrl: 'http://localhost:3000',
+    })),
+  }
+})
+
+// Mock uploader to prevent auth calls during activation
+// Use partial mock to keep uploadCursorChanges real so it calls the spied uploadAiBlameHandlerFromExtension
+vi.mock('../src/shared/uploader', async () => {
+  const actual = await vi.importActual<typeof import('../src/shared/uploader')>(
+    '../src/shared/uploader'
+  )
+  return {
+    ...actual,
+    getAuthenticatedForUpload: vi.fn(async () => undefined),
+  }
+})
+
+// Mock DailyMcpDetection
+vi.mock('../src/shared/DailyMcpDetection', () => ({
+  dailyMcpDetection: {
+    start: vi.fn(),
+    stop: vi.fn(),
+  },
+}))
+
+// Mock MCP detection
+vi.mock('../src/mobbdev_src/mcp', () => ({
+  detectMCPServers: vi.fn(async () => []),
+}))
+
+// Mock config module
+vi.mock('../src/shared/config', () => ({
+  initConfig: vi.fn(),
+  getConfig: vi.fn(() => ({
+    apiUrl: 'https://api.mobb.ai/v1/graphql',
+    webAppUrl: 'https://app.mobb.ai',
+    isDevExtension: false,
+  })),
+  hasRelevantConfigurationChanged: vi.fn(() => false),
+}))
+
+// Mock UI components
+vi.mock('../src/ui/AIBlameCache', () => ({
+  AIBlameCache: vi.fn().mockImplementation(() => ({
+    dispose: vi.fn(),
+  })),
+}))
+
+vi.mock('../src/ui/GitBlameCache', () => ({
+  GitBlameCache: vi.fn().mockImplementation(() => ({
+    dispose: vi.fn(),
+  })),
+}))
+
+vi.mock('../src/ui/TracyController', () => ({
+  TracyController: vi.fn().mockImplementation(() => ({
+    dispose: vi.fn(),
+  })),
+}))
+
+vi.mock('../src/ui/TracyStatusBar', () => ({
+  StatusBarView: vi.fn().mockImplementation(() => ({
+    dispose: vi.fn(),
+  })),
 }))
 
 beforeEach(() => {

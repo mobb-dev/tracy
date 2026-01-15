@@ -85,10 +85,33 @@ export type RepositoryInfo = {
   mobbAppBaseUrl: string
 }
 
+/**
+ * Wait for workspace folders to be available.
+ * VS Code/Cursor may not have workspaceFolders populated immediately on startup,
+ * even after the onStartupFinished activation event fires.
+ */
+async function waitForWorkspaceFolder(
+  maxWaitMs: number = 5000,
+  pollIntervalMs: number = 200
+): Promise<string | null> {
+  const startTime = Date.now()
+
+  while (Date.now() - startTime < maxWaitMs) {
+    const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+    if (folder) {
+      return folder
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
+  }
+
+  return null
+}
+
 export async function getRepositoryInfo(): Promise<RepositoryInfo | null> {
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+  // Wait for workspace folder with retry logic (handles race condition on startup)
+  const workspaceFolder = await waitForWorkspaceFolder()
   if (!workspaceFolder) {
-    logger.warn('No workspace folder found')
+    logger.warn('No workspace folder found after waiting')
     return null
   }
 

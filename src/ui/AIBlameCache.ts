@@ -5,6 +5,7 @@ import {
   Blame_Ai_Analysis_Request_State_Enum,
   GetAiBlameAttributionPromptQueryVariables,
   GetPromptSummaryQueryVariables,
+  GetTracyDiffUploadUrlMutationVariables,
   Status,
   StreamBlameAiAnalysisRequestsDocument,
 } from '../mobbdev_src/features/analysis/scm/generates/client_generates'
@@ -12,6 +13,7 @@ import {
   GitService,
   LocalCommitData,
 } from '../mobbdev_src/features/analysis/scm/services/GitService'
+import { uploadFile } from '../mobbdev_src/features/analysis/upload-file'
 import { configStore } from '../mobbdev_src/utils/ConfigStoreService'
 import { subscribeToBlameAiAnalysisRequests } from '../mobbdev_src/utils/subscribe/subscribe'
 import { getConfig } from '../shared/config'
@@ -481,12 +483,51 @@ export async function analyzeCommitForExtensionAIBlameWrapper(
       'Analyzing commit for AI Blame'
     )
 
+    // If we have a local diff, upload it to S3 first
+    if (localCommitData?.diff) {
+      try {
+        const uploadUrlVariables: GetTracyDiffUploadUrlMutationVariables = {
+          commitSha,
+        }
+        const uploadUrlResult =
+          await gqlClient.getTracyDiffUploadUrl(uploadUrlVariables)
+
+        if (
+          uploadUrlResult.getTracyDiffUploadUrl.status === Status.Ok &&
+          uploadUrlResult.getTracyDiffUploadUrl.uploadInfo
+        ) {
+          const { url, uploadFieldsJSON, uploadKey } =
+            uploadUrlResult.getTracyDiffUploadUrl.uploadInfo
+
+          await uploadFile({
+            file: Buffer.from(localCommitData.diff),
+            url,
+            uploadKey,
+            uploadFields: JSON.parse(uploadFieldsJSON),
+          })
+          logger.debug({ commitSha }, 'Successfully uploaded diff to S3')
+        } else {
+          logger.warn(
+            {
+              commitSha,
+              error: uploadUrlResult.getTracyDiffUploadUrl.error,
+            },
+            'Failed to get upload URL, server will attempt to fetch diff from SCM provider'
+          )
+        }
+      } catch (uploadError) {
+        logger.warn(
+          { commitSha, error: uploadError },
+          'Failed to upload diff to S3, server will attempt to fetch diff from SCM provider'
+        )
+      }
+    }
+
     const variables: AnalyzeCommitForExtensionAiBlameMutationVariables = {
       commitSha,
       organizationId,
       repositoryURL,
-      // Include local commit data if available (allows skipping SCM token)
-      commitDiff: localCommitData?.diff,
+      // Note: commitDiff is no longer sent - backend reads from S3
       commitTimestamp: localCommitData?.timestamp.toISOString(),
       parentCommits: localCommitData?.parentCommits?.map((p) => ({
         sha: p.sha,

@@ -1,0 +1,135 @@
+# Optimized Dockerfile for Cursor E2E tests
+# Uses aggressive cleanup and layer reduction to minimize image size
+FROM mcr.microsoft.com/playwright:v1.56.1-jammy
+
+# Set environment variables early
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=Etc/UTC \
+    DISPLAY=:99 \
+    TEST_TEMP_DIR=/tmp/e2e \
+    CURSOR_PATH=/opt/cursor/AppRun \
+    NODE_ENV=production
+
+# Install ALL dependencies in single layer with aggressive cleanup
+# This reduces final image size by 30-40% compared to multiple RUN statements
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # X11 and display server
+    xvfb x11vnc \
+    # Cursor/VS Code runtime dependencies
+    libgtk-3-0 libgbm1 libasound2 libxss1 libnss3 libnspr4 \
+    libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+    libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
+    libxrandr2 libpango-1.0-0 libcairo2 libatspi2.0-0 \
+    # Build tools (will be removed after use)
+    build-essential python3 \
+    # Utilities
+    curl wget git unzip zip \
+    # Install Node.js 22
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && npm install -g npm@latest \
+    # Download and extract Cursor
+    && cd /tmp \
+    && ARCH=$(uname -m) \
+    && if [ "$ARCH" = "x86_64" ]; then CURSOR_ARCH="linux-x64"; \
+       elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then CURSOR_ARCH="linux-arm64"; \
+       else echo "Unsupported architecture" && exit 1; fi \
+    && wget -q -O cursor.AppImage "https://api2.cursor.sh/updates/download/golden/${CURSOR_ARCH}/cursor/2.0" \
+    && chmod +x cursor.AppImage \
+    && ./cursor.AppImage --appimage-extract \
+    && mv squashfs-root /opt/cursor \
+    && ln -s /opt/cursor/AppRun /usr/local/bin/cursor \
+    && rm cursor.AppImage \
+    # Create non-root user
+    && groupadd -r testuser \
+    && useradd -r -g testuser -d /home/testuser -m testuser \
+    && mkdir -p /tmp/e2e /home/testuser/.config \
+    && chown -R testuser:testuser /tmp/e2e /home/testuser \
+    # Aggressive cleanup to reduce layer size
+    && apt-get remove -y build-essential python3 \
+    && apt-get autoremove -y \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /tmp/* \
+    && npm cache clean --force \
+    && rm -rf /root/.npm /home/testuser/.npm
+
+WORKDIR /workspace/clients/tracer_ext
+
+# Copy package files (for better layer caching)
+COPY clients/tracer_ext/package.json clients/tracer_ext/package-lock.json ./
+
+# Install npm dependencies and rebuild native modules in single layer
+COPY clients/tracer_ext/mobb-ai-tracer*.vsix ./
+RUN npm ci \
+    # Extract VSIX and rebuild native modules for Linux
+    && mkdir -p /tmp/vsix-staging \
+    && VSIX_FILE=$(ls mobb-ai-tracer-[0-9]*.vsix | head -1) \
+    && unzip -q "$VSIX_FILE" -d /tmp/vsix-staging \
+    && cd /tmp/vsix-staging/extension \
+    && npm install @vscode/sqlite3 --build-from-source \
+    # Repackage with Linux-native modules
+    && cd /tmp/vsix-staging \
+    && zip -r /workspace/clients/tracer_ext/mobb-ai-tracer-linux.vsix . \
+    # Clean up to reduce layer size
+    && rm -rf /tmp/vsix-staging \
+    && rm -f /workspace/clients/tracer_ext/mobb-ai-tracer-[0-9]*.vsix \
+    && npm cache clean --force \
+    && rm -rf /root/.npm /home/testuser/.npm
+
+# Copy test files
+COPY clients/tracer_ext/__tests__ ./__tests__
+
+# Create test runner and entrypoint scripts in single layer
+COPY clients/tracer_ext/__tests__/e2e/cursor/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN echo '#!/bin/bash\n\
+set -e\n\
+echo "================================="\n\
+echo "Starting Cursor Extension E2E Test"\n\
+echo "================================="\n\
+RESULTS_DIR="/workspace/clients/tracer_ext/test-results"\n\
+if [ ! -w "$RESULTS_DIR" ]; then\n\
+  mkdir -p /tmp/test-results\n\
+  rm -rf "$RESULTS_DIR" 2>/dev/null || true\n\
+  ln -sf /tmp/test-results "$RESULTS_DIR" 2>/dev/null || true\n\
+fi\n\
+mkdir -p "$RESULTS_DIR" 2>/dev/null || true\n\
+echo "Starting Xvfb..."\n\
+Xvfb :99 -screen 0 1920x1080x24 &\n\
+XVFB_PID=$!\n\
+sleep 2\n\
+if [ "$ENABLE_VNC" = "true" ]; then\n\
+  x11vnc -display :99 -forever -nopw -quiet -bg\n\
+fi\n\
+echo "Xvfb ready. Starting tests..."\n\
+cd /workspace/clients/tracer_ext\n\
+npx playwright test __tests__/e2e/cursor/playwright-automation.test.ts || TEST_EXIT_CODE=$?\n\
+if [ -L "$RESULTS_DIR" ] && [ -d /tmp/test-results ]; then\n\
+  rm "$RESULTS_DIR"\n\
+  mkdir -p "$RESULTS_DIR"\n\
+  cp -r /tmp/test-results/* "$RESULTS_DIR/" 2>/dev/null || true\n\
+fi\n\
+kill $XVFB_PID 2>/dev/null || true\n\
+if [ "${TEST_EXIT_CODE:-0}" -eq 0 ]; then\n\
+  echo ""\n\
+  echo "================================"\n\
+  echo "✅ E2E Tests PASSED"\n\
+  echo "================================"\n\
+else\n\
+  echo ""\n\
+  echo "================================"\n\
+  echo "❌ E2E Tests FAILED"\n\
+  echo "================================"\n\
+fi\n\
+exit ${TEST_EXIT_CODE:-0}\n\
+' > /usr/local/bin/run-e2e-tests.sh \
+    && chmod +x /usr/local/bin/run-e2e-tests.sh /usr/local/bin/entrypoint.sh \
+    && chown -R testuser:testuser /workspace
+
+USER testuser
+ENV HOME=/home/testuser
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["/usr/local/bin/run-e2e-tests.sh"]
+
+EXPOSE 5900

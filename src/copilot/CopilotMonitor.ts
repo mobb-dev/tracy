@@ -7,7 +7,13 @@ import { logger } from '../shared/logger'
 import { AppType } from '../shared/repositoryInfo'
 import { uploadCopilotChanges } from '../shared/uploader'
 import { CopilotCcreqWatcher } from './copilotCcreqWatcher'
-import { ChatMLSuccess, EDIT_TOOLS, ToolCall } from './events'
+import {
+  ChatMLMessage,
+  ChatMLSuccess,
+  ChatMLToolCall,
+  EDIT_TOOLS,
+  ToolCall,
+} from './events'
 import { LogContextRecord } from './events/LogContextRecord'
 import { LogContextWatcher } from './logContextWatcher'
 import { SnapshotTracker } from './snapshotTracker'
@@ -30,6 +36,49 @@ export class CopilotMonitor extends BaseMonitor {
     this.snapshot = new SnapshotTracker()
   }
 
+  /**
+   * Check if GitHub Copilot is available and functional.
+   * Tests multiple indicators to ensure Copilot monitoring will work.
+   *
+   * @returns true if Copilot is available and ccreq scheme works
+   */
+  private async isCopilotAvailable(): Promise<boolean> {
+    // 1. Check if GitHub Copilot extension is installed
+    const copilotExtension = vscode.extensions.getExtension('github.copilot')
+    const copilotChatExtension = vscode.extensions.getExtension(
+      'github.copilot-chat'
+    )
+
+    if (!copilotExtension && !copilotChatExtension) {
+      logger.info(
+        'GitHub Copilot extension not installed - CopilotMonitor will not start'
+      )
+      return false
+    }
+
+    logger.info('GitHub Copilot extension detected', {
+      copilot: copilotExtension?.id,
+      copilotChat: copilotChatExtension?.id,
+      copilotActive: copilotExtension?.isActive,
+      copilotChatActive: copilotChatExtension?.isActive,
+    })
+
+    // 2. Check if ccreq: URI scheme is accessible
+    try {
+      const testUri = vscode.Uri.parse('ccreq:latest.copilotmd')
+      await vscode.workspace.openTextDocument(testUri)
+      logger.info('ccreq: URI scheme is available - CopilotMonitor will start')
+      return true
+    } catch (err) {
+      logger.info(
+        'ccreq: URI scheme not available - likely no active Copilot Chat session. ' +
+          'CopilotMonitor will not start until Copilot Chat is used.',
+        { error: err instanceof Error ? err.message : String(err) }
+      )
+      return false
+    }
+  }
+
   async start(): Promise<void> {
     if (this._isRunning) {
       logger.info(`${this.name} is already running`)
@@ -41,6 +90,18 @@ export class CopilotMonitor extends BaseMonitor {
     try {
       // Initialize logging
       initFileLogger(this.context)
+
+      // Check if Copilot is actually available
+      const copilotAvailable = await this.isCopilotAvailable()
+      if (!copilotAvailable) {
+        logger.info(
+          `${this.name} not started - GitHub Copilot not available. ` +
+            `This is normal if Copilot is not installed or not actively being used.`
+        )
+        // Don't set _isRunning = true, monitor stays inactive
+        return
+      }
+
       // Optional: enable workspace edit tracing (harmless if not present)
       await vscode.commands
         .executeCommand('github.copilot.chat.replay.enableWorkspaceEditTracing')
@@ -174,21 +235,47 @@ export class CopilotMonitor extends BaseMonitor {
       }
     }
 
-    // Existing context/diff logic
+    // Log metadata tool names if present
+    if (evt.toolNames.length > 0) {
+      logger.info(
+        `ChatMLSuccess: metadata.tools names: [${evt.toolNames.join(', ')}]`
+      )
+    }
+
+    // Existing context/diff logic - find tool calls that match EDIT_TOOLS
     const toolIds = evt.getToolCallIds([...EDIT_TOOLS])
     if (!toolIds || toolIds.length === 0) {
-      logger.debug(`ChatMLSuccess: no tool call id found in requestMessages`)
+      logger.info(
+        `ChatMLSuccess: no matching EDIT_TOOLS found (expected: ${EDIT_TOOLS.join(', ')})`
+      )
+      // PRODUCTION BUG FIX (Jan 8, 2026):
+      // Fallback extraction handles VS Code Copilot which doesn't emit separate toolCall events.
+      // Instead, tool calls are embedded directly in ChatMLSuccess requestMessages.
+      // Without this fallback, VS Code Copilot inferences are silently lost.
+      await this.extractInferenceFromChatMLToolCalls(evt, model)
       return
     }
-    logger.info(`ChatMLSuccess: found tool call ids: ${toolIds.join(', ')}`)
+    logger.info(
+      `ChatMLSuccess: found matching tool call ids: ${toolIds.join(', ')}`
+    )
     // Extract userRequest prompt from requestMessages content blocks
     const prompt = evt.getPromptData()
     // For each tool id, emit a context if we have a diff and haven't recorded this id yet
     let wroteAny = false
     for (const id of toolIds) {
       const stable = makeStableId(String(id))
-      const inference =
-        this.inferenceMap.get(id) || this.inferenceMap.get(stable)
+      let inference = this.inferenceMap.get(id) || this.inferenceMap.get(stable)
+
+      // If no inference in map, try extracting directly from tool call arguments
+      if (!inference) {
+        inference = this.extractInferenceFromToolCallId(evt, id)
+        if (inference) {
+          logger.info(
+            `ChatMLSuccess: extracted inference directly from tool call ${id}`
+          )
+        }
+      }
+
       if (inference) {
         // dedupe by stable id
         if (!this.recordedContextIds.has(stable)) {
@@ -201,7 +288,7 @@ export class CopilotMonitor extends BaseMonitor {
               new Date().toISOString()
             )
           } catch (err) {
-            logger.error({ err }, `Failed uplaoding to bugsy for ${id}`)
+            logger.error({ err }, `Failed uploading to bugsy for ${id}`)
           }
           // Update recordedContextIds so we don't duplicate next time
           this.recordedContextIds.add(stable)
@@ -212,13 +299,177 @@ export class CopilotMonitor extends BaseMonitor {
           )
         }
       } else {
-        logger.debug(`ChatMLSuccess: no inference found for tool call id ${id}`)
+        logger.info(`ChatMLSuccess: no inference found for tool call id ${id}`)
       }
     }
     if (!wroteAny) {
-      logger.debug(
-        `ChatMLSuccess: no new inferences to record for this request`
+      logger.info(`ChatMLSuccess: no new inferences to record for this request`)
+    }
+  }
+
+  /**
+   * Extract inference directly from tool call arguments in ChatMLSuccess.
+   *
+   * **Production Bug Fix (Jan 8, 2026):**
+   * This fallback is required for VS Code Copilot which doesn't emit separate
+   * `kind: 'toolCall'` events like Cursor does. Without this, inferences from
+   * multi_replace_string_in_file and other tools would be silently lost.
+   *
+   * @param evt ChatMLSuccess event containing embedded tool calls
+   * @param toolCallId Specific tool call ID to extract inference from
+   * @returns Extracted inference or undefined if not found
+   */
+  private extractInferenceFromToolCallId(
+    evt: ChatMLSuccess,
+    toolCallId: string
+  ): string | undefined {
+    const allToolCalls = evt.getAllToolCalls()
+    for (const tc of allToolCalls) {
+      if (tc.id === toolCallId) {
+        // Parse the tool call from the raw event to get arguments
+        const toolCall = this.findToolCallInRaw(evt, toolCallId)
+        if (toolCall) {
+          const toolCallObj = ToolCall.fromJson({
+            id: toolCallId,
+            tool: tc.name,
+            kind: 'toolCall',
+            args: toolCall.function?.arguments || '{}',
+          })
+          return toolCallObj.getInference()
+        }
+      }
+    }
+    return undefined
+  }
+
+  /**
+   * Find a specific tool call by ID in the raw ChatML data
+   */
+  private findToolCallInRaw(
+    evt: ChatMLSuccess,
+    toolCallId: string
+  ): ChatMLToolCall | undefined {
+    const raw = evt.raw as Record<string, unknown> | undefined
+    if (!raw) {
+      return undefined
+    }
+
+    const requestMessages = raw.requestMessages as
+      | { messages?: ChatMLMessage[] }
+      | undefined
+    if (!requestMessages?.messages) {
+      return undefined
+    }
+
+    for (const msg of requestMessages.messages) {
+      const { toolCalls } = msg
+      if (!Array.isArray(toolCalls)) {
+        continue
+      }
+      for (const tc of toolCalls) {
+        if (tc.id === toolCallId) {
+          return tc as ChatMLToolCall
+        }
+      }
+    }
+    return undefined
+  }
+
+  /**
+   * Fallback: Extract inference directly from all tool calls in ChatMLSuccess.
+   *
+   * **Production Bug Fix (Jan 8, 2026):**
+   * VS Code Copilot embeds tool calls in ChatMLSuccess instead of emitting separate
+   * toolCall events. Without this fallback, ALL VS Code Copilot inferences would be lost.
+   * This was discovered during E2E testing but affects production since Nov 2025.
+   *
+   * @param evt ChatMLSuccess event containing embedded tool calls
+   * @param model Model name for upload metadata
+   */
+  private async extractInferenceFromChatMLToolCalls(
+    evt: ChatMLSuccess,
+    model: string
+  ): Promise<void> {
+    const allToolCalls = evt.getAllToolCalls()
+    if (allToolCalls.length === 0) {
+      logger.info(
+        'ChatMLSuccess fallback: no tool calls to extract inference from'
       )
+      return
+    }
+
+    logger.info(
+      `ChatMLSuccess fallback: attempting to extract inference from ${allToolCalls.length} tool calls`
+    )
+
+    const prompt = evt.getPromptData()
+    let wroteAny = false
+
+    for (const tc of allToolCalls) {
+      // Check if this tool is an edit tool we should process
+      if (!EDIT_TOOLS.includes(tc.name as (typeof EDIT_TOOLS)[number])) {
+        logger.info(`ChatMLSuccess fallback: skipping non-edit tool ${tc.name}`)
+        continue
+      }
+
+      const stable = makeStableId(tc.id)
+      if (this.recordedContextIds.has(stable)) {
+        logger.debug(
+          `ChatMLSuccess fallback: tool call ${tc.id} already recorded`
+        )
+        continue
+      }
+
+      // Extract inference from tool call arguments
+      const toolCall = this.findToolCallInRaw(evt, tc.id)
+      if (!toolCall) {
+        logger.info(
+          `ChatMLSuccess fallback: could not find tool call ${tc.id} in raw data`
+        )
+        continue
+      }
+
+      const toolCallObj = ToolCall.fromJson({
+        id: tc.id,
+        tool: tc.name,
+        kind: 'toolCall',
+        args: toolCall.function?.arguments || '{}',
+      })
+
+      const inference = toolCallObj.getInference()
+      if (!inference || inference.trim().length === 0) {
+        logger.info(
+          `ChatMLSuccess fallback: no inference extracted from ${tc.name}`
+        )
+        continue
+      }
+
+      logger.info(
+        `ChatMLSuccess fallback: extracted inference from ${tc.name} (${inference.length} chars)`
+      )
+
+      try {
+        await uploadCopilotChanges(
+          prompt,
+          inference,
+          model,
+          new Date().toISOString()
+        )
+        this.recordedContextIds.add(stable)
+        wroteAny = true
+        logger.info(`ChatMLSuccess fallback: uploaded inference for ${tc.id}`)
+      } catch (err) {
+        logger.error(
+          { err },
+          `ChatMLSuccess fallback: failed to upload ${tc.id}`
+        )
+      }
+    }
+
+    if (wroteAny) {
+      logger.info('ChatMLSuccess fallback: successfully uploaded inferences')
+    } else {
+      logger.info('ChatMLSuccess fallback: no new inferences to upload')
     }
   }
 

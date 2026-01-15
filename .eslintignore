@@ -6,3 +6,6 @@ coverage
 mobbdev_src
 .eslintrc.js
 scripts
+__tests__/e2e/
+playwright-report
+test-results

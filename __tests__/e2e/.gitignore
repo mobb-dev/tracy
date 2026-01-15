@@ -1,0 +1,10 @@
+# Auth files contain credentials - DO NOT COMMIT
+cursor/*.b64
+vscode/*.b64
+vscode/auth/*.b64
+cursor/auth/*.b64
+
+# Test results and artifacts
+test-results/
+*.png
+*.zip

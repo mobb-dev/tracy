@@ -44,7 +44,15 @@ export async function activate(context: vscode.ExtensionContext) {
     `Extension environment: ${isLocalEnv ? 'LOCAL' : isDevExtension ? 'DEV' : 'PRODUCTION'}`
   )
 
-  await getAuthenticatedForUpload()
+  try {
+    await getAuthenticatedForUpload()
+  } catch (error) {
+    // Don't crash activation on auth failure
+    logger.warn(
+      { error },
+      'Failed to authenticate for upload during activation'
+    )
+  }
 
   try {
     repoInfo = await getRepositoryInfo()

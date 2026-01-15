@@ -1,0 +1,9 @@
+node_modules
+out
+*.vsix
+coverage
+.vscode
+.git
+.gitignore
+*.log
+.DS_Store

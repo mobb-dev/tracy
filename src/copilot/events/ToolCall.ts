@@ -10,6 +10,11 @@ export const EDIT_TOOLS = [
   'apply_patch',
   'replace_string_in_file',
   'create_file',
+  // VS Code Copilot tools added to fix missing inference capture (GitHub Issues #261744, #263274)
+  // These tools were being used by VS Code Copilot since at least Nov 2025 but weren't captured
+  // until Jan 8, 2026, causing silent inference loss in production
+  'multi_replace_string_in_file', // Batch edits with multiple oldString/newString replacements
+  'editFiles', // VS Code edit agent tool set (groups file editing tools)
 ] as const
 
 export const READ_TOOLS = ['read_file'] as const
@@ -101,6 +106,66 @@ export function inferenceFromApplyPatch(
   }
 
   const result = addedLines.join('\n')
+  return result || undefined
+}
+
+/**
+ * Extract inference from VS Code Copilot's multi_replace_string_in_file tool.
+ *
+ * **Production Bug Fix (Jan 8, 2026):**
+ * VS Code Copilot was using this tool since at least Nov 24, 2025 (confirmed in test
+ * messages.json) but the extension wasn't capturing these inferences, causing silent
+ * data loss in production. See GitHub Issue #261744, #263274 for tool documentation.
+ *
+ * Tool format:
+ * - args.replacements: array of {filePath, oldString, newString, explanation?}
+ * - Each replacement is processed independently to extract added lines
+ *
+ * @param args Tool call arguments containing replacements array
+ * @returns Concatenated added lines from all replacements, or undefined if none
+ */
+export function inferenceFromMultiReplace(
+  args: Record<string, unknown>
+): string | undefined {
+  const { replacements } = args
+  if (!Array.isArray(replacements)) {
+    return undefined
+  }
+
+  const allAddedLines: string[] = []
+
+  for (const replacement of replacements) {
+    if (typeof replacement !== 'object' || replacement === null) {
+      continue
+    }
+
+    const rep = replacement as Record<string, unknown>
+    const oldString =
+      typeof rep['oldString'] === 'string' ? rep['oldString'] : undefined
+    const newString =
+      typeof rep['newString'] === 'string' ? rep['newString'] : undefined
+
+    if (!newString) {
+      continue
+    }
+
+    // Use the same logic as inferenceFromReplaceString
+    const newLines = newString.split('\n').map((l) => l.trimEnd())
+
+    if (!oldString) {
+      // If no oldString, treat everything as new
+      const nonEmpty = newLines.filter((l) => l.trim().length > 0)
+      allAddedLines.push(...nonEmpty)
+    } else {
+      const oldLines = oldString.split('\n').map((l) => l.trimEnd())
+      // "New" = lines that don't appear verbatim in oldString
+      const addedLines = newLines.filter((line) => !oldLines.includes(line))
+      const nonEmpty = addedLines.filter((l) => l.trim().length > 0)
+      allAddedLines.push(...nonEmpty)
+    }
+  }
+
+  const result = allAddedLines.join('\n')
   return result || undefined
 }
 
@@ -224,6 +289,14 @@ export class ToolCall {
         return inferenceFromCreateFile(this.args)
       case 'apply_patch':
         return inferenceFromApplyPatch(this.args)
+      case 'multi_replace_string_in_file':
+        return inferenceFromMultiReplace(this.args)
+      case 'editFiles':
+        // VS Code edit agent - try both patch and multi-replace formats
+        return (
+          inferenceFromApplyPatch(this.args) ||
+          inferenceFromMultiReplace(this.args)
+        )
       default:
         return undefined
     }

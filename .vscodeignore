@@ -20,6 +20,7 @@ tsconfig.eslint.json
 tsconfig.json
 vitest.config.ts
 .env.*
+!.env
 package.json.bak
 package-lock.json.bak
 package.json.tmp
@@ -27,3 +28,6 @@ icon.svg
 documentation/**
 version-check.sh
 publish.sh
+playwright-report/**
+test-results/**
+E2E-TESTING.md

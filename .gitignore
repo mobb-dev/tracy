@@ -28,6 +28,9 @@ mobb-ai-tracer-*.vsix
 !.env.project
 !.env.vault
 
+# Cursor auth for E2E tests (contains tokens)
+__tests__/e2e/cursor-auth.b64
+
 # Dependencies
 node_modules/
 
@@ -44,3 +47,9 @@ node_modules/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Intentionally not committed: we use pinned versions in package.json for reproducibility.
+# npm generates this file at build time. Committing it causes CI failures because native
+# optional dependencies (like @node-rs/crc32 used by ovsx) are platform-specific - a lock
+# file from macOS won't include Linux binaries, causing "Failed to load native binding" errors.
+package-lock.json
