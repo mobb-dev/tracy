@@ -1,6 +1,9 @@
 import * as vscode from 'vscode'
 
-import { GitService } from '../mobbdev_src/features/analysis/scm/services/GitService'
+import {
+  GitService,
+  isGitHubUrl,
+} from '../mobbdev_src/features/analysis/scm/services/GitService'
 import { createGQLClient } from './gqlClientFactory'
 import { logger } from './logger'
 
@@ -205,4 +208,28 @@ function getAppBaseUrl(): string {
     logger.warn('APP_BASE_URL environment variable not set, using empty string')
   }
   return baseUrl ?? ''
+}
+
+/**
+ * Gets the normalized GitHub repository URL from the current workspace.
+ * Returns null if not in a git repository or if not a GitHub repository.
+ * Only GitHub URLs are supported; non-GitHub repos return null.
+ */
+export async function getNormalizedGitHubRepoUrl(): Promise<string | null> {
+  const workspaceFolder = await waitForWorkspaceFolder()
+  if (!workspaceFolder) {
+    return null
+  }
+
+  try {
+    const gitService = new GitService(workspaceFolder)
+    const isRepo = await gitService.isGitRepository()
+    if (!isRepo) {
+      return null
+    }
+    const remoteUrl = await gitService.getRemoteUrl()
+    return isGitHubUrl(remoteUrl) ? remoteUrl : null
+  } catch {
+    return null
+  }
 }

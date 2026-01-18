@@ -112,7 +112,7 @@ export const conversationSummarySection = (
   if (summaryState === 'SUCCESS' && summary) {
     if (typeof summary === 'object') {
       const s = summary as PromptSummary
-      // Collapsible section for developersPlan and importantInstructionsAndPushbacks
+      // Collapsible sections for summary fields
       return html`<h3>Conversation Summary</h3>
         <div class="conversation-summary">
           <section class="summary-block">
@@ -156,9 +156,39 @@ export const conversationSummarySection = (
               class="collapsible-content is-collapsed"
               data-collapsible-content
             >
-              <p class="summary-text">
-                ${escapeHtml(s.aiImplementationDetails)}
-              </p>
+              <ul class="summary-list">
+                ${Array.isArray(s.aiImplementationDetails) &&
+                s.aiImplementationDetails.length > 0
+                  ? s.aiImplementationDetails
+                      .map((item) => html`<li>${escapeHtml(item)}</li>`)
+                      .join('')
+                  : html`<li><em>No implementation details</em></li>`}
+              </ul>
+            </div>
+          </section>
+
+          <section class="collapsible-section">
+            <button
+              type="button"
+              class="collapsible-header"
+              data-collapsible
+              aria-expanded="false"
+            >
+              <span class="arrow">▼</span>
+              <h4 class="collapsible-title">Developer's Pushbacks</h4>
+            </button>
+            <div
+              class="collapsible-content is-collapsed"
+              data-collapsible-content
+            >
+              <ul class="summary-list">
+                ${Array.isArray(s.developersPushbacks) &&
+                s.developersPushbacks.length > 0
+                  ? s.developersPushbacks
+                      .map((item) => html`<li>${escapeHtml(item)}</li>`)
+                      .join('')
+                  : html`<li><em>None</em></li>`}
+              </ul>
             </div>
           </section>
 
@@ -171,7 +201,7 @@ export const conversationSummarySection = (
             >
               <span class="arrow">▼</span>
               <h4 class="collapsible-title">
-                Important Instructions & Pushbacks
+                Important Instructions & Decisions
               </h4>
             </button>
             <div
@@ -179,9 +209,9 @@ export const conversationSummarySection = (
               data-collapsible-content
             >
               <ul class="summary-list">
-                ${Array.isArray(s.importantInstructionsAndPushbacks) &&
-                s.importantInstructionsAndPushbacks.length > 0
-                  ? s.importantInstructionsAndPushbacks
+                ${Array.isArray(s.importantInstructionsAndDecisions) &&
+                s.importantInstructionsAndDecisions.length > 0
+                  ? s.importantInstructionsAndDecisions
                       .map((item) => html`<li>${escapeHtml(item)}</li>`)
                       .join('')
                   : html`<li><em>None</em></li>`}

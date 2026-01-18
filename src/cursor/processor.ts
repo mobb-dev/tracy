@@ -1,4 +1,5 @@
 import { AiBlameInferenceType } from '../mobbdev_src/features/analysis/scm/generates/client_generates'
+import { logger } from '../shared/logger'
 import { DBRow, getRowsByLike } from './db'
 
 // Track uploaded inferences by toolCallId
@@ -158,6 +159,7 @@ async function processBubble(
 ): Promise<ProcessedChange | undefined> {
   // Value already validated by caller, but double-check
   if (!bubbleRow.value) {
+    logger.debug('processBubble: no value')
     return
   }
 
@@ -165,12 +167,22 @@ async function processBubble(
   const codeBlockId = bubbleData.toolFormerData?.additionalData?.codeblockId
 
   if (!codeBlockId) {
+    logger.debug(
+      {
+        toolName: bubbleData.toolFormerData?.name,
+        toolCallId: bubbleData.toolFormerData?.toolCallId,
+        status: bubbleData.toolFormerData?.status,
+        hasAdditionalData: !!bubbleData.toolFormerData?.additionalData,
+      },
+      'processBubble: no codeBlockId'
+    )
     return
   }
 
   const toolStatus = bubbleData.toolFormerData?.status
 
   if (toolStatus !== 'completed') {
+    logger.debug({ toolStatus }, 'processBubble: not completed')
     return
   }
 
@@ -184,6 +196,10 @@ async function processBubble(
   const composerRow = composerDataRows.at(0)
 
   if (!composerRow?.value) {
+    logger.debug(
+      { codeBlockId, composerDataRowsCount: composerDataRows.length },
+      'processBubble: no composerRow'
+    )
     return
   }
 
@@ -194,11 +210,16 @@ async function processBubble(
   const composerId = composerRow.key.split(':')[1]
 
   if (!model) {
+    logger.debug(
+      { composerId, hasModelConfig: !!composerData.modelConfig },
+      'processBubble: no model'
+    )
     return
   }
 
   const toolResult = bubbleData.toolFormerData?.result
   if (!toolResult) {
+    logger.debug('processBubble: no toolResult')
     return
   }
 

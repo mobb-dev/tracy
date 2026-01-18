@@ -32,17 +32,18 @@ export type AIBlameAttribution = {
   type: AiBlameInferenceType
 }
 
-export type frictionScore = {
-  score: number
+export type BackAndForthLevel = {
+  level: number
   justification: string
 }
 
 export type PromptSummary = {
   goal: string
   developersPlan: string[]
-  aiImplementationDetails: string
-  importantInstructionsAndPushbacks: string[]
-  frictionScore: frictionScore
+  aiImplementationDetails: string[]
+  developersPushbacks: string[]
+  importantInstructionsAndDecisions: string[]
+  backAndForthLevel: BackAndForthLevel
 }
 
 export type AIBlameAttributionList = AIBlameAttribution[]

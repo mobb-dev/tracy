@@ -11,6 +11,7 @@ import { detectMCPServers } from '../mobbdev_src/mcp'
 import { getConfig } from './config'
 import { createGQLClient } from './gqlClientFactory'
 import { logger } from './logger'
+import { getNormalizedGitHubRepoUrl } from './repositoryInfo'
 
 export async function getAuthenticatedForUpload() {
   logger.info('Getting authenticated for ide extension')
@@ -79,6 +80,9 @@ export async function detectMcps() {
 }
 
 export async function uploadCursorChanges(changes: ProcessedChange[]) {
+  // Get the normalized GitHub repository URL once for all changes
+  const repositoryUrl = await getNormalizedGitHubRepoUrl()
+
   for (const change of changes) {
     logger.info(
       `Uploading inference for model ${change.model} with createdAt ${change.createdAt.toISOString()}: ${change.additions.slice(0, 100)}...`
@@ -121,6 +125,7 @@ export async function uploadCursorChanges(changes: ProcessedChange[]) {
       logger.info('Starting upload to backend...', {
         apiUrl: config.apiUrl,
         webAppUrl: config.webAppUrl,
+        repositoryUrl,
       })
       const result: UploadAiBlameResult =
         await uploadAiBlameHandlerFromExtension({
@@ -133,6 +138,7 @@ export async function uploadCursorChanges(changes: ProcessedChange[]) {
           sessionId: change.composerId,
           apiUrl: config.apiUrl,
           webAppUrl: config.webAppUrl,
+          repositoryUrl,
         })
 
       logger.info('Upload completed successfully')
@@ -173,9 +179,11 @@ export async function uploadCopilotChanges(
 
   try {
     const config = getConfig()
+    const repositoryUrl = await getNormalizedGitHubRepoUrl()
     logger.info('Starting Copilot upload to backend...', {
       apiUrl: config.apiUrl,
       webAppUrl: config.webAppUrl,
+      repositoryUrl,
     })
     const result: UploadAiBlameResult = await uploadAiBlameHandlerFromExtension(
       {
@@ -187,6 +195,7 @@ export async function uploadCopilotChanges(
         blameType,
         apiUrl: config.apiUrl,
         webAppUrl: config.webAppUrl,
+        repositoryUrl,
       }
     )
 

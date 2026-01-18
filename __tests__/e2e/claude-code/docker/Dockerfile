@@ -47,13 +47,12 @@ COPY clients/cli ./clients/cli
 # Copy tracer_ext test files
 COPY clients/tracer_ext/__tests__ ./clients/tracer_ext/__tests__
 COPY clients/tracer_ext/package.json ./clients/tracer_ext/package.json
-COPY clients/tracer_ext/package-lock.json ./clients/tracer_ext/package-lock.json
 
 # Set working directory to tracer extension for tests
 WORKDIR /workspace/clients/tracer_ext
 
 # Install test dependencies
-RUN npm ci || npm install
+RUN npm install
 
 # Build mobbdev CLI (needed for hook installation)
 WORKDIR /workspace/clients/cli

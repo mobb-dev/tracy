@@ -98,7 +98,6 @@ WORKDIR /workspace/clients/tracer_ext
 # The CI workflow builds the VSIX before docker build
 COPY clients/tracer_ext/__tests__ ./__tests__
 COPY clients/tracer_ext/package.json ./package.json
-COPY clients/tracer_ext/package-lock.json ./package-lock.json
 
 # Copy VSIX files (built by CI before docker build)
 # Using a shell to handle the glob pattern more reliably
@@ -108,9 +107,7 @@ COPY clients/tracer_ext/mobb-ai-tracer*.vsix ./
 RUN echo "📦 VSIX files after COPY:" && ls -la *.vsix || (echo "❌ ERROR: No VSIX files found! Build the extension first." && exit 1)
 
 # Install test dependencies
-# Use npm instead of pnpm to avoid native module build approval issues
-# pnpm v10+ blocks build scripts by default which breaks @vscode/sqlite3 and better-sqlite3
-RUN npm ci || npm install
+RUN npm install
 
 # Extract the VSIX to a staging area and rebuild native modules for Linux
 # This is needed because the VSIX was built on macOS with macOS-native binaries
