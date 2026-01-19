@@ -39,6 +39,7 @@ vi.mock('vscode', () => {
         })),
       })),
       onDidChangeConfiguration: undefined, // Checked in extension.ts line 82
+      onDidChangeTextDocument: vi.fn(() => ({ dispose: vi.fn() })),
     },
     env: {
       appName: 'cursor',
@@ -53,6 +54,8 @@ vi.mock('vscode', () => {
         command: '',
       })),
       showInformationMessage: vi.fn(),
+      onDidChangeActiveTextEditor: vi.fn(() => ({ dispose: vi.fn() })),
+      activeTextEditor: undefined,
     },
     StatusBarAlignment: {
       Right: 2,

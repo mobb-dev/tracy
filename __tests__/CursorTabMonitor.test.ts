@@ -3,6 +3,7 @@ import { setTimeout } from 'node:timers/promises'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as vscode from 'vscode'
 
+import { AcceptanceTracker } from '../src/cursor_tab/AcceptanceTracker'
 import { CursorTabMonitor } from '../src/cursor_tab/CursorTabMonitor'
 import { AppType } from '../src/shared/repositoryInfo'
 import * as uploader from '../src/shared/uploader'
@@ -16,10 +17,17 @@ vi.mock('vscode', () => {
       createOutputChannel: vi.fn(() => ({
         appendLine: vi.fn(),
       })),
+      onDidChangeActiveTextEditor: vi.fn(() => ({ dispose: vi.fn() })),
+      activeTextEditor: {
+        document: {
+          uri: { toString: () => 'file:///test/file.ts' },
+        },
+      },
     },
     workspace: {
       textDocuments: [],
       asRelativePath: (_uri: unknown) => 'file.ts',
+      onDidChangeTextDocument: vi.fn(() => ({ dispose: vi.fn() })),
     },
   }
 })
@@ -30,6 +38,7 @@ vi.mock('../src/shared/logger', () => {
       info: vi.fn(),
       error: vi.fn(),
       warn: vi.fn(),
+      debug: vi.fn(),
     },
   }
 })
@@ -54,19 +63,36 @@ describe('CursorTabMonitor', () => {
       10
     )
 
+    // Initialize the acceptance tracker that immediately calls back (simulating acceptance)
+    ;(monitor as any).acceptanceTracker = new AcceptanceTracker((additions) => {
+      ;(monitor as any).uploadAcceptedCompletion(additions)
+    })
+    ;(monitor as any).activeEditorUri = 'file:///test/file.ts'
+
+    const additions =
+      'this is a long cursor tab completion line 1\nthis is a long cursor tab completion line 2'
+
     ;(monitor as any).processLogEntries(
       '+|this is a long cursor tab completion line 1\n+|this is a long cursor tab completion line 2\n'
     )
+
+    // Simulate the document change that triggers acceptance
+    const documentChangeHandler = vi.mocked(
+      vscode.workspace.onDidChangeTextDocument
+    ).mock.calls[0][0] as (event: vscode.TextDocumentChangeEvent) => void
+
+    documentChangeHandler({
+      document: { uri: { toString: () => 'file:///test/file.ts' } },
+      contentChanges: [{ text: additions }],
+    } as unknown as vscode.TextDocumentChangeEvent)
 
     // Upload is scheduled via a Promise chain; allow it to be queued.
     await setTimeout(0)
 
     expect(uploadCursorChangesSpy).toHaveBeenCalledOnce()
 
-    const change = uploadCursorChangesSpy.mock.calls.at(0).at(0).at(0)
-    expect(change.additions).toBe(
-      'this is a long cursor tab completion line 1\nthis is a long cursor tab completion line 2'
-    )
+    const change = uploadCursorChangesSpy.mock.calls.at(0)?.at(0)?.at(0)
+    expect(change.additions).toBe(additions)
   })
 
   it('should filter out human-written lines that appear in both removed and added sections', async () => {
@@ -81,19 +107,37 @@ describe('CursorTabMonitor', () => {
       10
     )
 
+    // Initialize the acceptance tracker that immediately calls back (simulating acceptance)
+    ;(monitor as any).acceptanceTracker = new AcceptanceTracker((additions) => {
+      ;(monitor as any).uploadAcceptedCompletion(additions)
+    })
+    ;(monitor as any).activeEditorUri = 'file:///test/file.ts'
+
+    const expectedAdditions = 'return {\n    model: change.model,\n  }\n}'
+
     // Simulate a diff where the first line appears in both - and + (human-written)
     // Only truly AI-generated lines should be included
     ;(monitor as any).processLogEntries(
       '-|export function uploadChange(change: ProcessedChange) {\n+|export function uploadChange(change: ProcessedChange) {\n+|return {\n+|    model: change.model,\n+|  }\n+|}'
     )
 
+    // Simulate the document change that triggers acceptance
+    const documentChangeHandler = vi.mocked(
+      vscode.workspace.onDidChangeTextDocument
+    ).mock.calls[0][0] as (event: vscode.TextDocumentChangeEvent) => void
+
+    documentChangeHandler({
+      document: { uri: { toString: () => 'file:///test/file.ts' } },
+      contentChanges: [{ text: expectedAdditions }],
+    } as unknown as vscode.TextDocumentChangeEvent)
+
     // Upload is scheduled via a Promise chain; allow it to be queued.
     await setTimeout(0)
 
     expect(uploadCursorChangesSpy).toHaveBeenCalledOnce()
 
-    const change = uploadCursorChangesSpy.mock.calls.at(0).at(0).at(0)
+    const change = uploadCursorChangesSpy.mock.calls.at(0)?.at(0)?.at(0)
     // The first line should be filtered out because it appears in both - and +
-    expect(change.additions).toBe('return {\n    model: change.model,\n  }\n}')
+    expect(change.additions).toBe(expectedAdditions)
   })
 })

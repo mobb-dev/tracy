@@ -9,9 +9,13 @@ import { BaseMonitor } from '../shared/IMonitor'
 import { logger } from '../shared/logger'
 import { AppType } from '../shared/repositoryInfo'
 import { uploadCursorChanges } from '../shared/uploader'
+import { AcceptanceTracker } from './AcceptanceTracker'
 
 export class CursorTabMonitor extends BaseMonitor {
   readonly name = 'CursorTabMonitor'
+  private acceptanceTracker: AcceptanceTracker | undefined
+  private activeEditorUri: string | undefined
+  private editorChangeDisposable: vscode.Disposable | undefined
 
   constructor(
     private context: vscode.ExtensionContext,
@@ -30,6 +34,20 @@ export class CursorTabMonitor extends BaseMonitor {
     logger.info(`Starting ${this.name}`)
 
     try {
+      // Initialize acceptance tracker with upload callback
+      this.acceptanceTracker = new AcceptanceTracker((additions) => {
+        this.uploadAcceptedCompletion(additions)
+      })
+
+      // Track active editor for document URI
+      this.activeEditorUri =
+        vscode.window.activeTextEditor?.document.uri.toString()
+      this.editorChangeDisposable = vscode.window.onDidChangeActiveTextEditor(
+        (editor) => {
+          this.activeEditorUri = editor?.document.uri.toString()
+        }
+      )
+
       //cursor uses an old vscode engine so we must use an old deprecated API
       const logPath = join(
         this.context.logPath,
@@ -97,6 +115,13 @@ export class CursorTabMonitor extends BaseMonitor {
       '../anysphere.cursor-always-local/Cursor Tab.log'
     )
     fs.unwatchFile(logPath)
+
+    this.acceptanceTracker?.dispose()
+    this.acceptanceTracker = undefined
+
+    this.editorChangeDisposable?.dispose()
+    this.editorChangeDisposable = undefined
+
     this._isRunning = false
     logger.info(`${this.name} stopped`)
   }
@@ -129,12 +154,25 @@ export class CursorTabMonitor extends BaseMonitor {
     }
 
     if (additions.length < 30) {
-      logger.info(`Cursor tab additions are smaller than 30. Ignore uploading`)
+      logger.info(`Cursor tab additions are smaller than 30. Ignore tracking`)
+      return
+    }
+
+    if (!this.activeEditorUri) {
+      logger.info(`No active editor, cannot track completion acceptance`)
       return
     }
 
     logger.info(`Cursor tab additions: ${additions.slice(0, 100)}...`)
 
+    // Track as pending instead of immediate upload
+    this.acceptanceTracker?.trackPendingCompletion(
+      additions,
+      this.activeEditorUri
+    )
+  }
+
+  private uploadAcceptedCompletion(additions: string): void {
     uploadCursorChanges([
       {
         additions,
