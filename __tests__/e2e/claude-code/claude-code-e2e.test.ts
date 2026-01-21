@@ -128,12 +128,12 @@ describe('Claude Code E2E with Hook Integration', () => {
 
       if (hasBedrockToken) {
         console.log('  ✅ AWS Bedrock bearer token found')
-        console.log(`     Region: ${process.env.AWS_REGION || 'us-east-1'}`)
+        console.log(`     Region: ${process.env.AWS_REGION || 'us-west-2'}`)
         tracker.mark('AWS Bedrock Configured')
       } else if (hasAwsCredentials) {
         console.log('  ✅ AWS Bedrock credentials found')
         console.log(
-          `     Region: ${process.env.AWS_DEFAULT_REGION || 'us-east-1'}`
+          `     Region: ${process.env.AWS_DEFAULT_REGION || 'us-west-2'}`
         )
         tracker.mark('AWS Bedrock Configured')
       } else if (hasAnthropicKey) {

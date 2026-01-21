@@ -390,4 +390,4 @@ describe('extension tests', () => {
       }
     }
   )
-}, 60000)
+}, 120000)

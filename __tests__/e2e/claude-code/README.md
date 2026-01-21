@@ -18,7 +18,7 @@ This test suite validates the complete flow:
 Claude Code uses AWS Bedrock for model access. You need:
 - `AWS_ACCESS_KEY_ID`
 - `AWS_SECRET_ACCESS_KEY`
-- `AWS_DEFAULT_REGION` (default: us-east-1)
+- `AWS_DEFAULT_REGION` (default: us-west-2)
 
 Alternatively, you can use `ANTHROPIC_API_KEY` for direct API access.
 
@@ -45,7 +45,7 @@ docker build \
 docker run --rm \
   -e AWS_ACCESS_KEY_ID="your-key" \
   -e AWS_SECRET_ACCESS_KEY="your-secret" \
-  -e AWS_DEFAULT_REGION="us-east-1" \
+  -e AWS_DEFAULT_REGION="us-west-2" \
   claude-code-e2e
 ```
 
@@ -59,7 +59,7 @@ The workflow runs automatically on:
 Configure these in your GitHub repository secrets:
 - `AWS_ACCESS_KEY_ID` - AWS access key with Bedrock permissions
 - `AWS_SECRET_ACCESS_KEY` - AWS secret key
-- `AWS_DEFAULT_REGION` - (Optional) AWS region, defaults to us-east-1
+- `AWS_DEFAULT_REGION` - (Optional) AWS region, defaults to us-west-2
 - `ANTHROPIC_API_KEY` - (Optional) Direct Anthropic API key fallback
 
 ## Test Checkpoints
