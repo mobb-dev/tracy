@@ -100,8 +100,9 @@ export class GitBlameCache {
       const git = createGitWithLogging(repoRoot, logger)
       const blameOutput = await git.raw(args)
 
-      // Parse the porcelain format output to extract line -> hash mapping
+      // Parse the porcelain format output to extract line -> hash mapping, including author info
       const lines = parseGitBlamePorcelainByLine(blameOutput)
+      // lines: Record<number, { commit, originalLine, authorName, authorEmail }>
       return { lines, documentVersion: document.version || 0 }
     } finally {
       await cleanupTempFile()

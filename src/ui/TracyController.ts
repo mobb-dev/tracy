@@ -1,6 +1,7 @@
 import * as vscode from 'vscode'
 
 import { EXTENSION_NAME } from '../env'
+import { BlameLineInfo } from '../mobbdev_src/utils/blame/gitBlameUtils'
 import { logger } from '../shared/logger'
 import { AIBlameAttribution, AIBlameCache } from './AIBlameCache'
 import { GitBlameCache } from './GitBlameCache'
@@ -13,10 +14,7 @@ const UNCOMMITTED_SHA = '0000000000000000000000000000000000000000'
 type BlameInfoResult =
   | {
       success: true
-      gitBlameInfo: {
-        commit: string
-        originalLine: number
-      }
+      gitBlameInfo: BlameLineInfo
     }
   | {
       success: false
@@ -123,10 +121,7 @@ export class TracyController {
 
       return {
         success: true,
-        gitBlameInfo: {
-          commit: gitBlameInfo.commit,
-          originalLine: gitBlameInfo.originalLine,
-        },
+        gitBlameInfo,
       }
     } catch (error) {
       logger.error({ error }, 'Error loading blame info:')
@@ -138,7 +133,7 @@ export class TracyController {
   }
 
   private async loadAttributionData(
-    blameInfo: { commit: string; originalLine: number },
+    blameInfo: BlameLineInfo,
     filePath: string
   ): Promise<AttributionResult> {
     try {
@@ -147,8 +142,10 @@ export class TracyController {
         filePath,
         blameInfo.originalLine
       )
-
       if (aiBlameResult) {
+        aiBlameResult.authorName = blameInfo.authorName
+        aiBlameResult.authorEmail = blameInfo.authorEmail
+        aiBlameResult.authorTime = blameInfo.authorTime
         let lineState: LineState
         if (aiBlameResult.type === 'CHAT') {
           lineState = LineState.AI

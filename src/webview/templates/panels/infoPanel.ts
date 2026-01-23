@@ -72,7 +72,9 @@ export const infoPanelTemplate = (
       typeInfo,
       attribution.toolName,
       attribution.commitSha,
-      commitUrl
+      commitUrl,
+      attribution.authorName,
+      attribution.authorTime
     )
 
     if (attribution.type === 'CHAT') {

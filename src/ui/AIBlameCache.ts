@@ -30,6 +30,9 @@ export type AIBlameAttribution = {
   toolName: string
   commitSha: string
   type: AiBlameInferenceType
+  authorName?: string
+  authorEmail?: string
+  authorTime?: number
 }
 
 export type BackAndForthLevel = {

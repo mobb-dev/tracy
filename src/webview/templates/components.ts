@@ -64,7 +64,9 @@ export const metaInfo = (
   model: string,
   toolName: string,
   commitSha: string,
-  commitUrl?: string
+  commitUrl?: string,
+  authorName?: string,
+  authorTime?: number
 ): string => {
   const safeModel = escapeHtml(model || 'Unknown')
   const safeToolName = escapeHtml(toolName || 'Unknown')
@@ -78,11 +80,25 @@ export const metaInfo = (
       >`
     : html`<span class="meta-item">${safeShortSha}</span>`
 
+  const authorDisplay = authorName
+    ? html`<span class="meta-item">${escapeHtml(authorName)}</span>`
+    : ''
+  const authorTimeDisplay = authorTime
+    ? html`<span class="meta-item">
+        ${new Date(authorTime * 1000).toLocaleString(undefined, {
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        })}
+      </span>`
+    : ''
   return html`
     <div class="meta-info">
       <span class="meta-item">${safeModel}</span>
       <span class="meta-item">${safeToolName}</span>
-      ${commitDisplay}
+      ${commitDisplay} ${authorDisplay} ${authorTimeDisplay}
     </div>
     <hr />
   `
@@ -308,7 +324,7 @@ export const blameInfoSection = (
   if (blameInfoState === 'IDLE') {
     return html`<div class="blame-info-loading">
       <div class="spinner"></div>
-      <span>Loading blame information...</span>
+      <span>Loading information...</span>
     </div>`
   }
 
@@ -316,13 +332,13 @@ export const blameInfoSection = (
   if (blameInfoState === 'LOADING') {
     return html`<div class="blame-info-loading">
       <div class="spinner"></div>
-      <span>Loading blame information...</span>
+      <span>Loading information...</span>
     </div>`
   }
 
   // Show error message
   if (blameInfoState === 'ERROR') {
-    const errorMessage = blameInfoError || 'Failed to load blame information'
+    const errorMessage = blameInfoError || 'Failed to load information'
     return html`<div class="blame-info-error">
       <span>${escapeHtml(errorMessage)}</span>
     </div>`

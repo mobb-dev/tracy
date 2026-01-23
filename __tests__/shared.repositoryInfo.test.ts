@@ -7,13 +7,30 @@ describe('detectAppType', () => {
     },
   }
 
+  const originalEnv = process.env
+
   beforeEach(() => {
     vi.resetModules()
     vi.doMock('vscode', () => mockVSCode)
+    // Clear environment variables that could affect detection
+    delete process.env.CURSOR_TRACE_ID
+    delete process.env.CURSOR_SESSION_ID
+    delete process.env.WINDSURF_IPC_HOOK
+    delete process.env.WINDSURF_PID
+    delete process.env.CLAUDE_DESKTOP
+    delete process.env.ANTHROPIC_CLAUDE
+    delete process.env.WEBSTORM_VM_OPTIONS
+    delete process.env.IDEA_VM_OPTIONS
+    delete process.env.JETBRAINS_IDE
+    delete process.env.VSCODE_IPC_HOOK
+    delete process.env.VSCODE_PID
+    delete process.env.TERM_PROGRAM
   })
 
   afterEach(() => {
     vi.resetAllMocks()
+    // Restore original environment
+    process.env = originalEnv
   })
 
   it('detects Visual Studio Code correctly', async () => {
