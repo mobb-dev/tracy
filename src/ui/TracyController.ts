@@ -530,7 +530,6 @@ export class TracyController {
 
     const selection = event.selections[0]
     const lineNumber = selection.active.line + 1 // Convert to 1-based
-    logger.info(`Selection changed: ${doc.uri.fsPath} at line ${lineNumber}`)
 
     // Only update if the linenumber has changed or the document has changed
     if (
@@ -539,6 +538,8 @@ export class TracyController {
     ) {
       return
     }
+
+    logger.debug(`Selection changed: ${doc.uri.fsPath} at line ${lineNumber}`)
     await this.handleLineChange(doc, lineNumber)
   }
 

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('vscode', () => ({}))
 
@@ -8,14 +8,15 @@ vi.mock('../src/shared/logger', () => {
       info: vi.fn(),
       warn: vi.fn(),
       error: vi.fn(),
+      debug: vi.fn(),
     },
   }
 })
 
 vi.mock('fs', () => ({
   promises: {
-    writeFile: vi.fn(),
-    unlink: vi.fn(),
+    writeFile: vi.fn().mockResolvedValue(undefined),
+    unlink: vi.fn().mockResolvedValue(undefined),
   },
 }))
 
@@ -28,6 +29,10 @@ vi.mock('../src/mobbdev_src/utils/gitUtils', () => ({
 }))
 
 describe('GitBlameCache', () => {
+  beforeEach(() => {
+    vi.resetModules()
+  })
+
   afterEach(() => {
     vi.resetAllMocks()
   })

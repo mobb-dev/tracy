@@ -1,5 +1,3 @@
-import * as vscode from 'vscode'
-
 import { ProcessedChange } from '../cursor/processor'
 import {
   PromptItemArray,
@@ -7,77 +5,9 @@ import {
   type UploadAiBlameResult,
 } from '../mobbdev_src/args/commands/upload_ai_blame'
 import { AiBlameInferenceType } from '../mobbdev_src/features/analysis/scm/generates/client_generates'
-import { detectMCPServers } from '../mobbdev_src/mcp'
 import { getConfig } from './config'
-import { createGQLClient } from './gqlClientFactory'
 import { logger } from './logger'
 import { getNormalizedGitHubRepoUrl } from './repositoryInfo'
-
-export async function getAuthenticatedForUpload() {
-  logger.info('Getting authenticated for ide extension')
-  try {
-    const gqlClient = await createGQLClient()
-    const userInfo = await gqlClient.getUserInfo()
-    if (userInfo?.email) {
-      logger.info({ email: userInfo.email }, 'Authentication successful')
-    } else {
-      logger.warn('Authentication completed but no user info available')
-    }
-  } catch (error) {
-    logger.error(
-      { error },
-      'Authentication failed - user may need to log in via Mobb CLI or browser'
-    )
-  }
-}
-
-export async function detectMcps() {
-  try {
-    const gqlClient = await createGQLClient()
-    const userInfo = await gqlClient.getUserInfo()
-    const userEmail = userInfo?.email
-
-    if (!userEmail) {
-      logger.error('Could not retrieve user email for MCP detection')
-      return
-    }
-
-    // Detect IDE type
-    const appName = vscode.env.appName.toLowerCase()
-    let ideName: 'cursor' | 'vscode'
-
-    if (appName.includes('visual studio code')) {
-      ideName = 'vscode'
-    } else if (appName.includes('cursor')) {
-      ideName = 'cursor'
-    } else {
-      logger.error(`Unknown IDE: ${appName}`)
-      return
-    }
-
-    // Detect MCP servers
-    const { organizationId, userName } = await gqlClient.getLastOrg(userEmail)
-
-    if (!organizationId) {
-      logger.error(
-        `Detecting MCP servers for IDE: ${ideName} is impossible because organization does not exist`
-      )
-      return
-    }
-
-    detectMCPServers({
-      ideName,
-      userEmail,
-      userName,
-      organizationId: String(organizationId),
-    })
-  } catch (e) {
-    logger.error(
-      { error: e },
-      'MCP detection failed, continuing with activation'
-    )
-  }
-}
 
 export async function uploadCursorChanges(changes: ProcessedChange[]) {
   // Get the normalized GitHub repository URL once for all changes

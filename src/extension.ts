@@ -1,6 +1,8 @@
+import open from 'open'
 import * as vscode from 'vscode'
 
 import { initDB } from './cursor/db'
+import { AuthManager } from './mobbdev_src/commands/AuthManager'
 import {
   getConfig,
   hasRelevantConfigurationChanged,
@@ -14,7 +16,6 @@ import {
   getRepositoryInfo,
   RepositoryInfo,
 } from './shared/repositoryInfo'
-import { getAuthenticatedForUpload } from './shared/uploader'
 import { AIBlameCache } from './ui/AIBlameCache'
 import { GitBlameCache } from './ui/GitBlameCache'
 import { TracyController } from './ui/TracyController'
@@ -26,6 +27,9 @@ let aiBlameCache: AIBlameCache | null = null
 let gitBlameCache: GitBlameCache | null = null
 let tracyController: TracyController | null = null
 let statusBarItem: vscode.StatusBarItem | null = null
+let statusBar: StatusBarView | null = null
+let authManager: AuthManager | null = null
+let authLink: string | null = null
 
 export async function activate(context: vscode.ExtensionContext) {
   // Initialize configuration from THIS extension's package.json
@@ -43,30 +47,28 @@ export async function activate(context: vscode.ExtensionContext) {
     { apiUrl, webAppUrl, isLocalEnv, isDevExtension },
     `Extension environment: ${isLocalEnv ? 'LOCAL' : isDevExtension ? 'DEV' : 'PRODUCTION'}`
   )
-
   try {
-    await getAuthenticatedForUpload()
-  } catch (error) {
-    // Don't crash activation on auth failure
-    logger.warn(
-      { error },
-      'Failed to authenticate for upload during activation'
-    )
-  }
+    // Initialize status bar
+    statusBar = initStatusBar(context)
 
-  try {
+    // Get authenticated before starting monitoring
+    await getAuthenticated(context, webAppUrl, apiUrl)
+
     repoInfo = await getRepositoryInfo()
+
+    if (!repoInfo) {
+      throw new Error('Failed to get repository info')
+    }
+    logger.info({ appType: repoInfo.appType }, 'Detected app type')
+
+    // Initialize web panel components
     setupView(context)
 
     dailyMcpDetection.start()
-
-    monitorManager = new MonitorManager(context)
-    const appType = monitorManager.getAppType()
-
-    logger.info({ appType }, 'Detected app type')
+    monitorManager = new MonitorManager(context, repoInfo.appType)
 
     // Initialize database for Cursor
-    if (appType === AppType.CURSOR) {
+    if (repoInfo.appType === AppType.CURSOR) {
       await initDB(context)
     }
 
@@ -108,9 +110,21 @@ export async function activate(context: vscode.ExtensionContext) {
   }
 }
 
+function initStatusBar(context: vscode.ExtensionContext): StatusBarView {
+  statusBarItem = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Right
+  )
+  context.subscriptions.push(statusBarItem)
+  return new StatusBarView(statusBarItem)
+}
+
 function setupView(context: vscode.ExtensionContext): void {
   if (!repoInfo || !repoInfo.organizationId || !repoInfo.gitRepoUrl) {
     logger.error('Repository info is not available for view setup')
+    return
+  }
+  if (!statusBar) {
+    logger.error('Status bar is not available for view setup')
     return
   }
   aiBlameCache = new AIBlameCache(
@@ -121,21 +135,59 @@ function setupView(context: vscode.ExtensionContext): void {
   gitBlameCache = new GitBlameCache(
     repoInfo.gitRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ''
   )
-  statusBarItem = vscode.window.createStatusBarItem(
-    vscode.StatusBarAlignment.Right
-  )
   tracyController = new TracyController(
     gitBlameCache,
     aiBlameCache,
-    new StatusBarView(statusBarItem),
+    statusBar,
     repoInfo?.gitRepoUrl ?? ''
   )
 
   // Register disposables for cleanup
-  context.subscriptions.push(statusBarItem)
   context.subscriptions.push({ dispose: () => tracyController?.dispose() })
   context.subscriptions.push({ dispose: () => aiBlameCache?.dispose() })
   context.subscriptions.push({ dispose: () => gitBlameCache?.dispose() })
+}
+
+async function getAuthenticated(
+  context: vscode.ExtensionContext,
+  webAppUrl?: string,
+  apiUrl?: string
+): Promise<void> {
+  authManager = new AuthManager(webAppUrl, apiUrl)
+  if (await authManager.isAuthenticated()) {
+    logger.info('User is already authenticated')
+  } else {
+    authLink = await authManager.generateLoginUrl()
+    if (authLink && statusBar) {
+      statusBar.setAuthPending(authLink)
+      // Register command to open/copy auth link
+      const openAuthCmd = 'mobbTracer.openAuthLink'
+      context.subscriptions.push(
+        vscode.commands.registerCommand(openAuthCmd, async () => {
+          if (authLink) {
+            try {
+              await open(authLink)
+            } catch (e) {
+              await vscode.env.clipboard.writeText(authLink)
+              vscode.window.showInformationMessage(
+                'Auth link copied to clipboard.'
+              )
+            }
+          }
+        })
+      )
+    } else {
+      logger.error('Failed to generate authentication link')
+      statusBar?.error('Authentication link generation failed')
+    }
+    const isAuthenticated = await authManager.waitForAuthentication()
+    if (isAuthenticated) {
+      logger.info('User authenticated successfully')
+      if (statusBar) {
+        statusBar.clearAuthPending()
+      }
+    }
+  }
 }
 
 export async function deactivate(): Promise<void> {

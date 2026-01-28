@@ -6,14 +6,15 @@ import { CursorTabMonitor } from '../cursor_tab/CursorTabMonitor'
 import { HumanTrackingSession } from '../human/HumanMonitor'
 import { IMonitor } from './IMonitor'
 import { logger } from './logger'
-import { AppType, detectAppType } from './repositoryInfo'
+import { AppType } from './repositoryInfo'
 
 export class MonitorManager {
   private monitors = new Map<AppType, IMonitor[]>()
-  private currentAppType: AppType
 
-  constructor(private context: vscode.ExtensionContext) {
-    this.currentAppType = detectAppType()
+  constructor(
+    private context: vscode.ExtensionContext,
+    private currentAppType: AppType
+  ) {
     this.initializeMonitors()
   }
 

@@ -190,6 +190,7 @@ const FILE_EDIT_TOOLS = [
   'apply_patch',
   'write',
   'edit_file',
+  'edit_file_v2',
   'MultiEdit',
 ]
 

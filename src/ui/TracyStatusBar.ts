@@ -14,6 +14,8 @@ export enum LineState {
   BLAME_DIRTY = 'blame-dirty',
   BLAME_NOT_COMMITTED = 'blame-not-committed',
   BLAME_ERROR = 'blame-error',
+  AUTH_REQUIRED = 'auth-required',
+  AUTH_PENDING = 'auth-pending',
 }
 
 export type IView = {
@@ -26,6 +28,16 @@ export type IView = {
    * Display an error message in the view.
    */
   error(message: string): void
+
+  /**
+   * Set auth pending state.
+   */
+  setAuthPending(loginUrl: string): void
+
+  /**
+   * Clear auth pending state.
+   */
+  clearAuthPending(): void
 }
 
 const STATUS_PREFIX = EXTENSION_NAME.endsWith('-dev')
@@ -33,12 +45,20 @@ const STATUS_PREFIX = EXTENSION_NAME.endsWith('-dev')
   : 'Tracy: '
 
 export class StatusBarView implements IView {
+  private isAuthPending = false
+  private authPendingUrl?: string
+
   constructor(private statusBarItem: StatusBarItem) {
     this.statusBarItem.text = STATUS_PREFIX
     this.statusBarItem.command = `${EXTENSION_NAME}.showInfoPanel`
     this.refresh(LineState.NO_FILE_SELECTED_ERROR)
   }
   refresh(state: LineState): void {
+    // Don't allow refresh to override auth pending state
+    if (this.isAuthPending && state !== LineState.AUTH_PENDING) {
+      return
+    }
+
     let markdown: string = ''
     switch (state) {
       case LineState.NO_FILE_SELECTED_ERROR:
@@ -86,11 +106,18 @@ export class StatusBarView implements IView {
         markdown =
           'Error retrieving git blame information. Please ensure the repository is accessible.'
         break
+      case LineState.AUTH_REQUIRED:
+        this.statusBarItem.text = `${STATUS_PREFIX}$(error)`
+        markdown = 'Authentication required.'
+        break
       default:
         this.statusBarItem.text = `${STATUS_PREFIX}$(dash)`
     }
 
-    this.statusBarItem.command = `${EXTENSION_NAME}.showInfoPanel`
+    if (state !== LineState.AUTH_PENDING) {
+      this.statusBarItem.command = `${EXTENSION_NAME}.showInfoPanel`
+      this.statusBarItem.backgroundColor = undefined
+    }
     const fullMarkdown = this.generateMarkdown(markdown)
     const markdownString = new vscode.MarkdownString(fullMarkdown)
     markdownString.isTrusted = true // Enable command links
@@ -107,6 +134,25 @@ export class StatusBarView implements IView {
     markdownString.supportHtml = true // Enable HTML for better formatting
     this.statusBarItem.tooltip = markdownString
     this.statusBarItem.show()
+  }
+
+  /**
+   * Set auth pending state - this state cannot be overridden by regular refresh calls
+   */
+  setAuthPending(loginUrl: string): void {
+    this.isAuthPending = true
+    this.authPendingUrl = loginUrl
+    this.refresh(LineState.AUTH_PENDING)
+  }
+
+  /**
+   * Clear auth pending state and return to normal operation
+   */
+  clearAuthPending(): void {
+    this.isAuthPending = false
+    this.authPendingUrl = undefined
+    this.statusBarItem.backgroundColor = undefined
+    this.refresh(LineState.NO_FILE_SELECTED_ERROR)
   }
 
   private generateMarkdown(context: string | null): string {

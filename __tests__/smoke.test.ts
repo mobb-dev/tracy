@@ -53,10 +53,45 @@ vi.mock('vscode', () => {
           /* empty */
         },
       }),
+      onDidChangeConfiguration: () => ({
+        dispose() {
+          /* empty */
+        },
+      }),
+    },
+    window: {
+      createStatusBarItem: vi.fn(() => ({
+        text: '',
+        tooltip: '',
+        show: vi.fn(),
+        hide: vi.fn(),
+        dispose: vi.fn(),
+      })),
+      showInformationMessage: vi.fn(),
+    },
+    commands: {
+      registerCommand: vi.fn(() => ({
+        dispose() {
+          /* empty */
+        },
+      })),
+      executeCommand: vi.fn(),
     },
     env: {
       appName: 'cursor',
+      clipboard: {
+        writeText: vi.fn(),
+      },
     },
+    StatusBarAlignment: {
+      Right: 2,
+      Left: 1,
+    },
+    MarkdownString: vi.fn().mockImplementation((value) => ({
+      value: value || '',
+      isTrusted: false,
+      supportHtml: false,
+    })),
   }
 })
 

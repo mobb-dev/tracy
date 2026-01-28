@@ -29,7 +29,7 @@ export class GitBlameCache {
   private async getBlameInfo(
     document: vscode.TextDocument
   ): Promise<GitBlameInfo> {
-    logger.info(
+    logger.debug(
       `Fetching git blame for ${document.fileName} (version: ${document.version})`
     )
     const cached = this.cache.get(document.uri.fsPath)
