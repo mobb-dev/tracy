@@ -2,6 +2,7 @@ import open from 'open'
 import * as vscode from 'vscode'
 
 import { initDB } from './cursor/db'
+import { EXTENSION_NAME } from './env'
 import { AuthManager } from './mobbdev_src/commands/AuthManager'
 import {
   getConfig,
@@ -11,18 +12,14 @@ import {
 import { dailyMcpDetection } from './shared/DailyMcpDetection'
 import { initLogger, logger } from './shared/logger'
 import { MonitorManager } from './shared/MonitorManager'
-import {
-  AppType,
-  getRepositoryInfo,
-  RepositoryInfo,
-} from './shared/repositoryInfo'
+import { AppType, initRepoInfo, repoInfo } from './shared/repositoryInfo'
 import { AIBlameCache } from './ui/AIBlameCache'
 import { GitBlameCache } from './ui/GitBlameCache'
 import { TracyController } from './ui/TracyController'
 import { StatusBarView } from './ui/TracyStatusBar'
 
 let monitorManager: MonitorManager | null = null
-let repoInfo: RepositoryInfo | null = null
+
 let aiBlameCache: AIBlameCache | null = null
 let gitBlameCache: GitBlameCache | null = null
 let tracyController: TracyController | null = null
@@ -48,18 +45,18 @@ export async function activate(context: vscode.ExtensionContext) {
     `Extension environment: ${isLocalEnv ? 'LOCAL' : isDevExtension ? 'DEV' : 'PRODUCTION'}`
   )
   try {
-    // Initialize status bar
+    // Initialize status bar, we need it for auth status updates
     statusBar = initStatusBar(context)
 
     // Get authenticated before starting monitoring
     await getAuthenticated(context, webAppUrl, apiUrl)
 
-    repoInfo = await getRepositoryInfo()
-
+    // Initialize repository info, needs to be done after auth but before monitoring
+    await initRepoInfo()
     if (!repoInfo) {
       throw new Error('Failed to get repository info')
     }
-    logger.info({ appType: repoInfo.appType }, 'Detected app type')
+    logger.info(`Repository info: ${JSON.stringify(repoInfo)}`)
 
     // Initialize web panel components
     setupView(context)
@@ -102,7 +99,6 @@ export async function activate(context: vscode.ExtensionContext) {
         })
       )
     }
-
     logger.info('Extension activated successfully')
   } catch (err) {
     logger.error({ err }, 'Failed to activate extension')
@@ -161,20 +157,22 @@ async function getAuthenticated(
     if (authLink && statusBar) {
       statusBar.setAuthPending(authLink)
       // Register command to open/copy auth link
-      const openAuthCmd = 'mobbTracer.openAuthLink'
       context.subscriptions.push(
-        vscode.commands.registerCommand(openAuthCmd, async () => {
-          if (authLink) {
-            try {
-              await open(authLink)
-            } catch (e) {
-              await vscode.env.clipboard.writeText(authLink)
-              vscode.window.showInformationMessage(
-                'Auth link copied to clipboard.'
-              )
+        vscode.commands.registerCommand(
+          `${EXTENSION_NAME}.openAuthLink`,
+          async () => {
+            if (authLink) {
+              try {
+                await open(authLink)
+              } catch (e) {
+                await vscode.env.clipboard.writeText(authLink)
+                vscode.window.showInformationMessage(
+                  'Auth link copied to clipboard.'
+                )
+              }
             }
           }
-        })
+        )
       )
     } else {
       logger.error('Failed to generate authentication link')

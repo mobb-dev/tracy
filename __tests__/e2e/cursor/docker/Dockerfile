@@ -44,22 +44,34 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs && \
     npm install -g npm@latest pnpm
 
-# Download and install Cursor AppImage
-# Note: This downloads the latest version. Pin to a specific version for reproducibility.
-# Detect architecture and download the correct version (x64 for CI, arm64 for ARM)
-RUN cd /tmp && \
+# Cache-bust argument to force fresh Cursor download
+# Pass --build-arg CURSOR_CACHE_BUST=$(date +%s) to force re-download
+ARG CURSOR_CACHE_BUST=1
+
+# Download and install Cursor AppImage - ALWAYS fetches latest version
+# The CURSOR_CACHE_BUST arg ensures this step is not cached when arg changes
+# Uses the website download API which returns the truly latest version (not the outdated "golden" channel)
+RUN echo "Cache bust: ${CURSOR_CACHE_BUST}" && \
+    cd /tmp && \
     ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then \
-      CURSOR_ARCH="linux-x64"; \
+      CURSOR_PLATFORM="linux-x64"; \
     elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
-      CURSOR_ARCH="linux-arm64"; \
+      CURSOR_PLATFORM="linux-arm64"; \
     else \
       echo "Unsupported architecture: $ARCH" && exit 1; \
     fi && \
-    echo "Downloading Cursor for $CURSOR_ARCH (detected: $ARCH)" && \
-    wget -O cursor.AppImage "https://api2.cursor.sh/updates/download/golden/${CURSOR_ARCH}/cursor/2.0" && \
+    echo "Fetching latest Cursor version info for $CURSOR_PLATFORM..." && \
+    DOWNLOAD_INFO=$(curl -sL "https://www.cursor.com/api/download?platform=${CURSOR_PLATFORM}&releaseTrack=latest") && \
+    DOWNLOAD_URL=$(echo "$DOWNLOAD_INFO" | grep -o '"downloadUrl":"[^"]*"' | cut -d'"' -f4) && \
+    CURSOR_VERSION=$(echo "$DOWNLOAD_INFO" | grep -o '"version":"[^"]*"' | cut -d'"' -f4) && \
+    echo "Latest version: $CURSOR_VERSION" && \
+    echo "Download URL: $DOWNLOAD_URL" && \
+    curl -sL -o cursor.AppImage "$DOWNLOAD_URL" && \
+    ls -lh cursor.AppImage && \
     chmod +x cursor.AppImage && \
     ./cursor.AppImage --appimage-extract && \
+    echo "✅ Cursor $CURSOR_VERSION extracted" && \
     mv squashfs-root /opt/cursor && \
     ln -s /opt/cursor/AppRun /usr/local/bin/cursor && \
     rm cursor.AppImage
@@ -120,10 +132,11 @@ RUN mkdir -p /tmp/vsix-staging && \
     npm install @vscode/sqlite3 --build-from-source && \
     echo "✅ Native module rebuilt for Linux"
 
-# Repackage the VSIX with Linux-native modules
+# Repackage the VSIX with Linux-native modules and clean up staging directory
 RUN cd /tmp/vsix-staging && \
     zip -r /workspace/clients/tracer_ext/mobb-ai-tracer-linux.vsix . && \
-    echo "✅ VSIX repackaged with Linux-native modules"
+    echo "✅ VSIX repackaged with Linux-native modules" && \
+    rm -rf /tmp/vsix-staging
 
 # Verify VSIX was created
 RUN ls -lh *.vsix && echo "✓ VSIX files ready for testing"

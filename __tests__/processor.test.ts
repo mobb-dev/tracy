@@ -15,6 +15,7 @@ vi.mock('../src/cursor/db', () => {
   return {
     getRowsByLike: vi.fn(),
     getCompletedFileEditBubbles: vi.fn(),
+    getComposerContent: vi.fn(),
   }
 })
 
@@ -28,10 +29,12 @@ vi.mock('../src/shared/logger', () => {
 })
 
 const getRowsByLike = vi.mocked(db.getRowsByLike)
+const getComposerContent = vi.mocked(db.getComposerContent)
 
 beforeEach(() => {
   resetProcessedBubbles()
   getRowsByLike.mockReset()
+  getComposerContent.mockReset()
 })
 
 // Helper to create a bubble row with value
@@ -82,6 +85,38 @@ function createComposerRow(key: string, modelName = 'Test model') {
       modelConfig: {
         modelName,
         maxModel: false,
+      },
+    }),
+  }
+}
+
+// Helper to create an edit_file_v2 bubble row (no codeblockId, has content IDs)
+function createEditFileV2BubbleRow(
+  key: string,
+  beforeContentId: string,
+  afterContentId: string,
+  createdAt: string,
+  status = 'completed',
+  toolCallId = `toolu_${Math.random().toString(36).slice(2)}`
+) {
+  return {
+    key,
+    value: JSON.stringify({
+      createdAt,
+      toolFormerData: {
+        name: 'edit_file_v2',
+        status,
+        toolCallId,
+        params: JSON.stringify({
+          relativeWorkspacePath: '/path/to/file.ts',
+          streamingContent: 'full file content...',
+          noCodeblock: true,
+        }),
+        result: JSON.stringify({
+          beforeContentId,
+          afterContentId,
+        }),
+        additionalData: {}, // No codeblockId for edit_file_v2
       },
     }),
   }
@@ -488,6 +523,220 @@ describe('processor tests', () => {
 
       const changes = await processBubbles([bubble], new Date('2024-01-01'))
       expect(changes).toHaveLength(0)
+    })
+  })
+
+  describe('edit_file_v2 handling', () => {
+    it('processes edit_file_v2 bubble with content IDs', async () => {
+      const bubble = createEditFileV2BubbleRow(
+        'bubbleId:xxx:yyy',
+        'composer.content.before123',
+        'composer.content.after456',
+        '3001-01-01T12:00:00.000Z'
+      )
+
+      // Mock content lookup
+      getComposerContent
+        .mockResolvedValueOnce('line1\nline2\n') // before content
+        .mockResolvedValueOnce('line1\nline2\nline3 added\n') // after content
+
+      // Mock composer lookup
+      getRowsByLike.mockResolvedValueOnce([createComposerRow('composerData:1')])
+
+      const changes = await processBubbles([bubble], new Date('2024-01-01'))
+
+      expect(changes).toHaveLength(1)
+      expect(changes[0].additions).toBe('line3 added')
+      expect(changes[0].model).toBe('Test model')
+      expect(getComposerContent).toHaveBeenCalledWith(
+        'composer.content.before123'
+      )
+      expect(getComposerContent).toHaveBeenCalledWith(
+        'composer.content.after456'
+      )
+    })
+
+    it('extracts multiple added lines from edit_file_v2', async () => {
+      const bubble = createEditFileV2BubbleRow(
+        'bubbleId:xxx:yyy',
+        'composer.content.before',
+        'composer.content.after',
+        '3001-01-01T12:00:00.000Z'
+      )
+
+      // Mock content lookup - before has 1 line, after has 4 lines
+      getComposerContent
+        .mockResolvedValueOnce('original line\n')
+        .mockResolvedValueOnce(
+          'original line\nnew line 1\nnew line 2\nnew line 3\n'
+        )
+
+      getRowsByLike.mockResolvedValueOnce([createComposerRow('composerData:1')])
+
+      const changes = await processBubbles([bubble], new Date('2024-01-01'))
+
+      expect(changes).toHaveLength(1)
+      expect(changes[0].additions).toBe('new line 1\nnew line 2\nnew line 3')
+    })
+
+    it('handles edit_file_v2 with complete file replacement', async () => {
+      const bubble = createEditFileV2BubbleRow(
+        'bubbleId:xxx:yyy',
+        'composer.content.before',
+        'composer.content.after',
+        '3001-01-01T12:00:00.000Z'
+      )
+
+      // Mock content lookup - completely different content
+      getComposerContent
+        .mockResolvedValueOnce('old content\nold line 2\n')
+        .mockResolvedValueOnce('new content\nnew line 2\nnew line 3\n')
+
+      getRowsByLike.mockResolvedValueOnce([createComposerRow('composerData:1')])
+
+      const changes = await processBubbles([bubble], new Date('2024-01-01'))
+
+      expect(changes).toHaveLength(1)
+      // Should contain only additions (new content)
+      expect(changes[0].additions).toContain('new content')
+      expect(changes[0].additions).toContain('new line 2')
+      expect(changes[0].additions).toContain('new line 3')
+    })
+
+    it('skips edit_file_v2 when before content not found', async () => {
+      const bubble = createEditFileV2BubbleRow(
+        'bubbleId:xxx:yyy',
+        'composer.content.before',
+        'composer.content.after',
+        '3001-01-01T12:00:00.000Z'
+      )
+
+      // Mock content lookup - before content not found
+      getComposerContent
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce('after content')
+
+      const changes = await processBubbles([bubble], new Date('2024-01-01'))
+
+      expect(changes).toHaveLength(0)
+    })
+
+    it('skips edit_file_v2 when after content not found', async () => {
+      const bubble = createEditFileV2BubbleRow(
+        'bubbleId:xxx:yyy',
+        'composer.content.before',
+        'composer.content.after',
+        '3001-01-01T12:00:00.000Z'
+      )
+
+      // Mock content lookup - after content not found
+      getComposerContent
+        .mockResolvedValueOnce('before content')
+        .mockResolvedValueOnce(undefined)
+
+      const changes = await processBubbles([bubble], new Date('2024-01-01'))
+
+      expect(changes).toHaveLength(0)
+    })
+
+    it('skips edit_file_v2 when composer not found', async () => {
+      const bubble = createEditFileV2BubbleRow(
+        'bubbleId:xxx:yyy',
+        'composer.content.before',
+        'composer.content.after',
+        '3001-01-01T12:00:00.000Z'
+      )
+
+      // Mock content lookup
+      getComposerContent
+        .mockResolvedValueOnce('before content')
+        .mockResolvedValueOnce('after content')
+
+      // Mock composer lookup - not found
+      getRowsByLike.mockResolvedValueOnce([])
+
+      const changes = await processBubbles([bubble], new Date('2024-01-01'))
+
+      expect(changes).toHaveLength(0)
+    })
+
+    it('deduplicates edit_file_v2 by toolCallId', async () => {
+      const toolCallId = 'toolu_unique123'
+      const bubble = createEditFileV2BubbleRow(
+        'bubbleId:xxx:yyy',
+        'composer.content.before',
+        'composer.content.after',
+        '3001-01-01T12:00:00.000Z',
+        'completed',
+        toolCallId
+      )
+
+      // Mock content lookup
+      getComposerContent
+        .mockResolvedValue('before content')
+        .mockResolvedValue('after content with additions')
+
+      getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
+
+      // Reset mocks for each call to have fresh content
+      getComposerContent.mockReset()
+      getComposerContent
+        .mockResolvedValueOnce('before')
+        .mockResolvedValueOnce('after new line')
+
+      // First call - should process
+      const changes1 = await processBubbles([bubble], new Date('2024-01-01'))
+      expect(changes1).toHaveLength(1)
+
+      // Second call with same toolCallId - should skip
+      const changes2 = await processBubbles([bubble], new Date('2024-01-01'))
+      expect(changes2).toHaveLength(0)
+    })
+
+    it('handles edit_file_v2 with empty before content (new file)', async () => {
+      const bubble = createEditFileV2BubbleRow(
+        'bubbleId:xxx:yyy',
+        'composer.content.before',
+        'composer.content.after',
+        '3001-01-01T12:00:00.000Z'
+      )
+
+      // Mock content lookup - empty before (new file)
+      getComposerContent
+        .mockResolvedValueOnce('')
+        .mockResolvedValueOnce('line1\nline2\nline3\n')
+
+      getRowsByLike.mockResolvedValueOnce([createComposerRow('composerData:1')])
+
+      const changes = await processBubbles([bubble], new Date('2024-01-01'))
+
+      expect(changes).toHaveLength(1)
+      expect(changes[0].additions).toBe('line1\nline2\nline3')
+    })
+
+    it('processes edit_file_v2 with inline modifications', async () => {
+      const bubble = createEditFileV2BubbleRow(
+        'bubbleId:xxx:yyy',
+        'composer.content.before',
+        'composer.content.after',
+        '3001-01-01T12:00:00.000Z'
+      )
+
+      // Mock content lookup - modification in middle of file
+      getComposerContent
+        .mockResolvedValueOnce('function hello() {\n  console.log("old");\n}\n')
+        .mockResolvedValueOnce(
+          'function hello() {\n  console.log("new message");\n  console.log("extra line");\n}\n'
+        )
+
+      getRowsByLike.mockResolvedValueOnce([createComposerRow('composerData:1')])
+
+      const changes = await processBubbles([bubble], new Date('2024-01-01'))
+
+      expect(changes).toHaveLength(1)
+      // Should contain the new/modified lines
+      expect(changes[0].additions).toContain('console.log("new message")')
+      expect(changes[0].additions).toContain('console.log("extra line")')
     })
   })
 })

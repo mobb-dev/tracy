@@ -224,3 +224,21 @@ export async function getCompletedFileEditBubbles(): Promise<DBRow[]> {
     return stmt.all(...FILE_EDIT_TOOLS) as DBRow[]
   })
 }
+
+/**
+ * Get content stored at a composer.content.* key.
+ * Used for edit_file_v2 which stores before/after content separately.
+ *
+ * @param contentId - The content ID (e.g., "composer.content.abc123...")
+ * @returns The content string, or undefined if not found
+ */
+export async function getComposerContent(
+  contentId: string
+): Promise<string | undefined> {
+  return executeWithReconnect((conn) => {
+    const sql = 'SELECT value FROM cursorDiskKV WHERE key = ?'
+    const stmt = conn.prepare(sql)
+    const row = stmt.get(contentId) as { value?: string } | undefined
+    return row?.value
+  })
+}

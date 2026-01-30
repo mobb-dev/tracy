@@ -1,6 +1,8 @@
+import { diffLines } from 'diff'
+
 import { AiBlameInferenceType } from '../mobbdev_src/features/analysis/scm/generates/client_generates'
 import { logger } from '../shared/logger'
-import { DBRow, getRowsByLike } from './db'
+import { DBRow, getComposerContent, getRowsByLike } from './db'
 
 // Track uploaded inferences by toolCallId
 // toolCallId exists for all completed tool calls (both accepted and rejected)
@@ -151,8 +153,17 @@ type ToolResult = {
 }
 
 /**
+ * Result structure for edit_file_v2 tool.
+ * Unlike other tools, it stores content IDs instead of inline diffs.
+ */
+type EditFileV2Result = {
+  beforeContentId: string
+  afterContentId: string
+}
+
+/**
  * Process a single bubble row that has already been pre-filtered
- * to have a codeblockId (indicating a completed edit) and valid timestamp.
+ * to have a completed tool call with valid timestamp.
  */
 async function processBubble(
   bubbleRow: DBRow
@@ -164,21 +175,8 @@ async function processBubble(
   }
 
   const bubbleData = JSON.parse(bubbleRow.value) as unknown as BubbleData
-  const codeBlockId = bubbleData.toolFormerData?.additionalData?.codeblockId
-
-  if (!codeBlockId) {
-    logger.debug(
-      {
-        toolName: bubbleData.toolFormerData?.name,
-        toolCallId: bubbleData.toolFormerData?.toolCallId,
-        status: bubbleData.toolFormerData?.status,
-        hasAdditionalData: !!bubbleData.toolFormerData?.additionalData,
-      },
-      'processBubble: no codeBlockId'
-    )
-    return
-  }
-
+  const toolName = bubbleData.toolFormerData?.name
+  const toolCallId = bubbleData.toolFormerData?.toolCallId
   const toolStatus = bubbleData.toolFormerData?.status
 
   if (toolStatus !== 'completed') {
@@ -186,7 +184,39 @@ async function processBubble(
     return
   }
 
+  const toolResult = bubbleData.toolFormerData?.result
+  if (!toolResult) {
+    logger.debug('processBubble: no toolResult')
+    return
+  }
+
   const createdAt = new Date(bubbleData.createdAt)
+
+  // Handle edit_file_v2 differently - it has no codeBlockId but has content IDs
+  if (toolName === 'edit_file_v2') {
+    return processEditFileV2Bubble(
+      bubbleData,
+      toolCallId,
+      createdAt,
+      bubbleRow.key
+    )
+  }
+
+  // For other tools, require codeBlockId
+  const codeBlockId = bubbleData.toolFormerData?.additionalData?.codeblockId
+
+  if (!codeBlockId) {
+    logger.debug(
+      {
+        toolName,
+        toolCallId,
+        status: toolStatus,
+        hasAdditionalData: !!bubbleData.toolFormerData?.additionalData,
+      },
+      'processBubble: no codeBlockId'
+    )
+    return
+  }
 
   const composerDataRows = await getRowsByLike({
     key: 'composerData:%',
@@ -217,12 +247,6 @@ async function processBubble(
     return
   }
 
-  const toolResult = bubbleData.toolFormerData?.result
-  if (!toolResult) {
-    logger.debug('processBubble: no toolResult')
-    return
-  }
-
   const additions = extractAdditions(toolResult)
   const conversation = await extractConversation(composerData, createdAt)
 
@@ -234,6 +258,152 @@ async function processBubble(
     type: AiBlameInferenceType.Chat,
     composerId,
   }
+}
+
+/**
+ * Process an edit_file_v2 bubble which has a different structure:
+ * - No codeBlockId in additionalData
+ * - Result contains beforeContentId and afterContentId instead of diff chunks
+ * - Content must be looked up from composer.content.* keys
+ */
+async function processEditFileV2Bubble(
+  bubbleData: BubbleData,
+  toolCallId: string | undefined,
+  createdAt: Date,
+  bubbleKey: string
+): Promise<ProcessedChange | undefined> {
+  const toolResult = bubbleData.toolFormerData?.result
+  if (!toolResult) {
+    logger.debug('processEditFileV2Bubble: no toolResult')
+    return
+  }
+
+  let result: EditFileV2Result
+  try {
+    result = JSON.parse(toolResult) as EditFileV2Result
+  } catch {
+    logger.debug('processEditFileV2Bubble: failed to parse toolResult')
+    return
+  }
+
+  const { beforeContentId, afterContentId } = result
+  // afterContentId is required, but beforeContentId can be missing for new file creation
+  if (!afterContentId) {
+    logger.debug(
+      { beforeContentId, afterContentId },
+      'processEditFileV2Bubble: missing afterContentId'
+    )
+    return
+  }
+
+  // Look up the actual content from composer.content.* keys
+  // For new files, beforeContentId is undefined, so we use empty string as before content
+  const [beforeContent, afterContent] = await Promise.all([
+    beforeContentId ? getComposerContent(beforeContentId) : Promise.resolve(''),
+    getComposerContent(afterContentId),
+  ])
+
+  if (afterContent === undefined) {
+    logger.debug(
+      {
+        beforeContentId,
+        afterContentId,
+        hasBeforeContent: beforeContent !== undefined,
+        hasAfterContent: afterContent !== undefined,
+      },
+      'processEditFileV2Bubble: afterContent not found'
+    )
+    return
+  }
+
+  // Use empty string as fallback for beforeContent (new file case or lookup failure)
+  const resolvedBeforeContent = beforeContent ?? ''
+
+  // Compute additions by diffing before and after content
+  const additions = extractAdditionsFromDiff(
+    resolvedBeforeContent,
+    afterContent
+  )
+
+  // Extract composerId from bubble key (format: bubbleId:{composerId}:{bubbleId})
+  const keyParts = bubbleKey.split(':')
+  if (keyParts.length < 2) {
+    logger.debug(
+      { bubbleKey },
+      'processEditFileV2Bubble: invalid bubble key format'
+    )
+    return
+  }
+  const composerId = keyParts[1]
+
+  // Look up composer data by composerId
+  const composerDataRows = await getRowsByLike({
+    key: `composerData:${composerId}`,
+    keyOnly: false,
+  })
+  const composerRow = composerDataRows.at(0)
+
+  if (!composerRow?.value) {
+    logger.debug(
+      { composerId, composerDataRowsCount: composerDataRows.length },
+      'processEditFileV2Bubble: no composerRow found'
+    )
+    return
+  }
+
+  const composerData = JSON.parse(composerRow.value) as unknown as ComposerData
+  const model = composerData.modelConfig?.modelName
+
+  if (!model) {
+    logger.debug(
+      { composerId, hasModelConfig: !!composerData.modelConfig },
+      'processEditFileV2Bubble: no model found'
+    )
+    return
+  }
+
+  const conversation = await extractConversation(composerData, createdAt)
+
+  return {
+    additions,
+    conversation,
+    createdAt,
+    model,
+    type: AiBlameInferenceType.Chat,
+    composerId,
+  }
+}
+
+/**
+ * Compute additions by diffing before and after content.
+ * Uses the 'diff' library to generate a line-by-line diff.
+ */
+function extractAdditionsFromDiff(
+  beforeContent: string,
+  afterContent: string
+): string {
+  const changes = diffLines(beforeContent, afterContent)
+  const additions: string[] = []
+
+  for (const change of changes) {
+    if (change.added) {
+      // Split by newlines and add each line (removing trailing empty line if present)
+      const lines = change.value.split('\n')
+      for (const line of lines) {
+        // Only add non-empty lines or preserve intentional empty lines within content
+        if (line || lines.indexOf(line) < lines.length - 1) {
+          additions.push(line)
+        }
+      }
+    }
+  }
+
+  // Remove trailing empty string if the last added content ended with newline
+  while (additions.length > 0 && additions[additions.length - 1] === '') {
+    additions.pop()
+  }
+
+  return additions.join('\n')
 }
 
 function extractAdditions(toolFormerDataResult: string): string {

@@ -396,6 +396,13 @@ export class AIBlameCache {
                       `AIBlameCache: Final result for commit ${commitSha}, attributions=${attributions.length}`
                     )
                     finalize(attributions)
+                  } else if (
+                    finalResponse?.__typename === 'ProcessAIBlameErrorResult'
+                  ) {
+                    logger.error(
+                      `AIBlameCache: ProcessAIBlameErrorResult for commit ${commitSha}: ${finalResponse.error}`
+                    )
+                    finalize(null)
                   } else {
                     logger.error(
                       `AIBlameCache: Unexpected response type after completion: ${finalResponse?.__typename}`

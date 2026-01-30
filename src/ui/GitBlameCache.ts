@@ -22,9 +22,42 @@ export type GitBlameInfo = {
 const MAX_CACHE_SIZE = 100
 
 export class GitBlameCache {
+  private gitHeadDisposable: vscode.Disposable | undefined
   private cache = new Map<string, GitBlameInfo>()
+  private lastHeadCommit: string | undefined
 
-  constructor(private repoPath: string) {}
+  constructor(private repoPath: string) {
+    this.setupGitHeadListener()
+  }
+
+  private setupGitHeadListener(): void {
+    const gitExt = vscode.extensions.getExtension('vscode.git')?.exports
+    const git = gitExt?.getAPI(1)
+    const repo = git?.repositories?.[0]
+    if (!repo) {
+      logger.warn(
+        'GitBlameCache: No git repository found, HEAD listener not set up.'
+      )
+      return
+    }
+    this.lastHeadCommit = repo.state.HEAD?.commit
+
+    this.gitHeadDisposable = repo.state.onDidChange(() => {
+      const head = repo.state.HEAD
+      const newCommit = head?.commit
+
+      // same branch name, different commit => commit happened
+      if (newCommit && newCommit !== this.lastHeadCommit) {
+        logger.info(
+          `GitBlameCache: Detected HEAD change from ${this.lastHeadCommit} to ${newCommit}, clearing blame cache.`
+        )
+        this.lastHeadCommit = newCommit
+
+        // invalidate your blame cache here
+        this.cache.clear() // or clear just affected files
+      }
+    })
+  }
 
   private async getBlameInfo(
     document: vscode.TextDocument
@@ -151,6 +184,7 @@ export class GitBlameCache {
   }
 
   dispose(): void {
+    this.gitHeadDisposable?.dispose()
     this.clearAll()
   }
 }

@@ -1,6 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('vscode', () => ({}))
+vi.mock('vscode', () => ({
+  extensions: {
+    getExtension: vi.fn(() => ({
+      exports: {
+        getAPI: vi.fn(() => ({
+          repositories: [],
+        })),
+      },
+    })),
+  },
+}))
 
 vi.mock('../src/shared/logger', () => {
   return {

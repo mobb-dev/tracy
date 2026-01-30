@@ -1,3 +1,6 @@
+import * as semver from 'semver'
+
+import { AppType, repoInfo } from '../../../shared/repositoryInfo'
 import type { InfoPanelData, WebviewContext } from '../../types'
 import { baseLayout } from '../base'
 import {
@@ -30,10 +33,17 @@ export const infoPanelTemplate = (
   } = data
 
   let body = ''
+  // Only show continue conversation button for chat attributions with successful state
+  // For cursor, IDE version needs to be 2.3.34+
+  // Other IDE types show the button unconditionally
   if (
     attribution &&
     attribution.type === 'CHAT' &&
-    conversationState === 'SUCCESS'
+    conversationState === 'SUCCESS' &&
+    repoInfo &&
+    (repoInfo.appType !== AppType.CURSOR ||
+      (repoInfo.appType === AppType.CURSOR &&
+        semver.gte(repoInfo.ideVersion, '2.3.34')))
   ) {
     body = fileHeader(fileName, lineNumber, true)
   } else {

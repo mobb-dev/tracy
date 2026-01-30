@@ -1,3 +1,5 @@
+import * as fs from 'fs'
+import * as path from 'path'
 import * as vscode from 'vscode'
 
 import {
@@ -6,6 +8,12 @@ import {
 } from '../mobbdev_src/features/analysis/scm/services/GitService'
 import { createGQLClient } from './gqlClientFactory'
 import { logger } from './logger'
+
+export let repoInfo: RepositoryInfo | null = null
+
+export async function initRepoInfo(): Promise<void> {
+  repoInfo = await getRepositoryInfo()
+}
 
 /**
  * Supported IDE/editor types for tracking and analytics.
@@ -85,6 +93,7 @@ export type RepositoryInfo = {
   userEmail: string
   organizationId: string
   appType: AppType
+  ideVersion: string // default to 0.0.0 if unknown
   mobbAppBaseUrl: string
 }
 
@@ -158,19 +167,16 @@ export async function getRepositoryInfo(): Promise<RepositoryInfo | null> {
     }
 
     const appType = detectAppType()
-
+    const IDEversion = getIdeVersion(appType)
     const repoInfo: RepositoryInfo = {
       gitRepoUrl: gitUrl,
       gitRoot,
       userEmail: userInfo.email,
       organizationId: String(organizationId),
       appType,
+      ideVersion: IDEversion,
       mobbAppBaseUrl: getAppBaseUrl(),
     }
-
-    logger.info(
-      `Repository info resolved - URL: ${gitUrl}, Email: ${userInfo.email}, Org: ${organizationId}, App: ${appType}`
-    )
     return repoInfo
   } catch (error) {
     logger.error({ error }, 'Failed to get repository info')
@@ -231,5 +237,27 @@ export async function getNormalizedGitHubRepoUrl(): Promise<string | null> {
     return isGitHubUrl(remoteUrl) ? remoteUrl : null
   } catch {
     return null
+  }
+}
+
+export function getIdeVersion(appType: AppType): string {
+  switch (appType) {
+    case AppType.VSCODE:
+      return vscode.version
+    case AppType.CURSOR:
+      try {
+        const productJsonPath = path.join(vscode.env.appRoot, 'product.json')
+        const raw = fs.readFileSync(productJsonPath, 'utf-8')
+        const productJson = JSON.parse(raw)
+        return productJson.version || '0.0.0'
+      } catch (error) {
+        logger.error(
+          { error },
+          'Failed to read Cursor product.json for IDE version'
+        )
+        return '0.0.0'
+      }
+    default:
+      return '0.0.0'
   }
 }

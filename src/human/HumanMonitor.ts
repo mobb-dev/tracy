@@ -81,10 +81,15 @@ export class HumanTrackingSession extends BaseMonitor {
           try {
             const { uri } = closedDocument
             const documentUri = uri.toString()
-            logger.info(`Human Code: document closed event for ${documentUri}`)
             const closedSegments =
               this.segmenter.onDidCloseTextDocument(documentUri)
-            void this.handleClosedSegments(closedSegments)
+            // Only log if user actually interacted with the file
+            if (closedSegments.length > 0) {
+              logger.info(
+                `Human Code: document closed with ${closedSegments.length} segment(s) for ${documentUri}`
+              )
+              void this.handleClosedSegments(closedSegments)
+            }
           } catch (err) {
             logger.error({ err }, 'Human Code document close handling error')
           }

@@ -1006,6 +1006,28 @@ test.describe('Cursor Extension E2E with UI Automation', () => {
                 if (content.includes('MOBB-TRACER')) {
                   console.log('  ✅ Found MOBB-TRACER entries in logs')
                 }
+
+                // Print key log contents to stdout for CI debugging
+                if (logFile.includes('mobb-ai-tracer')) {
+                  console.log(`\n📄 Contents of ${path.basename(logFile)}:`)
+                  console.log('─'.repeat(60))
+                  // Show FIRST 150 lines to see initial processing (important for debugging)
+                  const lines = content.split('\n')
+                  const firstLines = lines.slice(0, 150).join('\n')
+                  console.log(firstLines)
+                  if (lines.length > 150) {
+                    console.log(`\n... (${lines.length - 150} more lines) ...`)
+                  }
+                  console.log('─'.repeat(60))
+                } else if (logFile.includes('exthost.log')) {
+                  console.log(`\n📄 Contents of ${path.basename(logFile)}:`)
+                  console.log('─'.repeat(60))
+                  // Last 50 lines for exthost errors
+                  const lines = content.split('\n')
+                  const lastLines = lines.slice(-50).join('\n')
+                  console.log(lastLines)
+                  console.log('─'.repeat(60))
+                }
               }
             }
           } else {
@@ -1013,6 +1035,16 @@ test.describe('Cursor Extension E2E with UI Automation', () => {
           }
         } catch (e) {
           console.log(`  Could not capture extension host logs: ${e}`)
+        }
+
+        // Print extension-output.txt if it was captured earlier
+        const extOutputPath = path.join('test-results', 'extension-output.txt')
+        if (fs.existsSync(extOutputPath)) {
+          const extOutput = fs.readFileSync(extOutputPath, 'utf8')
+          console.log('\n📄 Contents of extension-output.txt:')
+          console.log('─'.repeat(60))
+          console.log(extOutput)
+          console.log('─'.repeat(60))
         }
 
         throw uploadError

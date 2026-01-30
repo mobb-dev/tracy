@@ -15,7 +15,6 @@ export enum LineState {
   BLAME_NOT_COMMITTED = 'blame-not-committed',
   BLAME_ERROR = 'blame-error',
   AUTH_REQUIRED = 'auth-required',
-  AUTH_PENDING = 'auth-pending',
 }
 
 export type IView = {
@@ -55,7 +54,7 @@ export class StatusBarView implements IView {
   }
   refresh(state: LineState): void {
     // Don't allow refresh to override auth pending state
-    if (this.isAuthPending && state !== LineState.AUTH_PENDING) {
+    if (this.isAuthPending && state !== LineState.AUTH_REQUIRED) {
       return
     }
 
@@ -107,14 +106,18 @@ export class StatusBarView implements IView {
           'Error retrieving git blame information. Please ensure the repository is accessible.'
         break
       case LineState.AUTH_REQUIRED:
-        this.statusBarItem.text = `${STATUS_PREFIX}$(error)`
-        markdown = 'Authentication required.'
+        this.statusBarItem.command = `${EXTENSION_NAME}.openAuthLink`
+        this.statusBarItem.text = `${STATUS_PREFIX}$(sign-in) Authentication required`
+        this.statusBarItem.backgroundColor = new vscode.ThemeColor(
+          'statusBarItem.warningBackground'
+        )
+        markdown = 'Click to authenticate with Mobb Tracy'
         break
       default:
         this.statusBarItem.text = `${STATUS_PREFIX}$(dash)`
     }
 
-    if (state !== LineState.AUTH_PENDING) {
+    if (state !== LineState.AUTH_REQUIRED) {
       this.statusBarItem.command = `${EXTENSION_NAME}.showInfoPanel`
       this.statusBarItem.backgroundColor = undefined
     }
@@ -142,7 +145,7 @@ export class StatusBarView implements IView {
   setAuthPending(loginUrl: string): void {
     this.isAuthPending = true
     this.authPendingUrl = loginUrl
-    this.refresh(LineState.AUTH_PENDING)
+    this.refresh(LineState.AUTH_REQUIRED)
   }
 
   /**

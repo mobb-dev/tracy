@@ -183,16 +183,25 @@ vi.mock('../src/shared/repositoryInfo', async () => {
   const actual = await vi.importActual<
     typeof import('../src/shared/repositoryInfo')
   >('../src/shared/repositoryInfo')
+
+  const mockRepoInfo = {
+    gitRepoUrl: 'https://github.com/test/repo.git',
+    gitRoot: '/test/workspace',
+    userEmail: 'test@example.com',
+    organizationId: 'test-org-id',
+    appType: 'cursor',
+    ideVersion: '0.30.0',
+    mobbAppBaseUrl: 'http://localhost:3000',
+  }
+
   return {
     ...actual,
-    getRepositoryInfo: vi.fn(async () => ({
-      gitRepoUrl: 'https://github.com/test/repo.git',
-      gitRoot: '/test/workspace',
-      userEmail: 'test@example.com',
-      organizationId: 'test-org-id',
-      appType: 'cursor',
-      mobbAppBaseUrl: 'http://localhost:3000',
-    })),
+    repoInfo: mockRepoInfo,
+    initRepoInfo: vi.fn(async () => {
+      // Set the mocked repoInfo
+      return mockRepoInfo
+    }),
+    getRepositoryInfo: vi.fn(async () => mockRepoInfo),
   }
 })
 
