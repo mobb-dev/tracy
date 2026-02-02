@@ -1,7 +1,7 @@
 {
   "name": "mobb-ai-tracer",
   "displayName": "Mobb Tracy",
-  "version": "0.2.46",
+  "version": "0.2.47",
   "repository": "https://github.com/mobb-dev/tracy",
   "publisher": "Mobb",
   "icon": "icon.png",
@@ -65,6 +65,8 @@
   "dependencies": {
     "@gitbeaker/requester-utils": "43.8.0",
     "@gitbeaker/rest": "43.8.0",
+    "@grpc/grpc-js": "1.14.3",
+    "@grpc/proto-loader": "0.8.0",
     "@modelcontextprotocol/sdk": "1.25.2",
     "@octokit/core": "5.2.0",
     "@octokit/request-error": "5.1.1",
