@@ -4,10 +4,11 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as vscode from 'vscode'
 
+import { GitService } from '../mobbdev_src/features/analysis/scm/services/GitService'
 import {
-  GitService,
-  isGitHubUrl,
-} from '../mobbdev_src/features/analysis/scm/services/GitService'
+  parseScmURL,
+  ScmType,
+} from '../mobbdev_src/features/analysis/scm/shared/src/urlParser'
 import { createGQLClient } from './gqlClientFactory'
 import { logger } from './logger'
 
@@ -236,7 +237,8 @@ export async function getNormalizedGitHubRepoUrl(): Promise<string | null> {
       return null
     }
     const remoteUrl = await gitService.getRemoteUrl()
-    return isGitHubUrl(remoteUrl) ? remoteUrl : null
+    const parsed = parseScmURL(remoteUrl)
+    return parsed?.scmType === ScmType.GitHub ? remoteUrl : null
   } catch {
     return null
   }
