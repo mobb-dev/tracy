@@ -139,7 +139,7 @@ export class CopilotCcreqWatcher {
       const tool = obj.tool as unknown as string
       logger.info(`ccreq:${id}.json parsed as tool=${tool}`)
     } else if (this.isChatMLSuccessEvent(obj)) {
-      logger.info(`ccreq:${id}.json parsed as ChatMLSuccess`)
+      logger.debug(`ccreq:${id}.json parsed as ChatMLSuccess`)
     } else {
       const kind = obj.kind as unknown as string
       const tool = obj.tool as unknown as string
@@ -203,6 +203,26 @@ export class CopilotCcreqWatcher {
     obj: Record<string, unknown>
   ): Promise<void> {
     try {
+      // Log raw metadata to analyze cycle completion signals
+      const metadata = obj.metadata as Record<string, unknown> | undefined
+      if (metadata) {
+        logger.debug(
+          {
+            hasRequestId: 'requestId' in metadata,
+            requestId: metadata.requestId,
+            hasStartTime: 'startTime' in metadata,
+            hasEndTime: 'endTime' in metadata,
+            endTime: metadata.endTime,
+            hasDuration: 'duration' in metadata,
+            duration: metadata.duration,
+            model: metadata.model,
+          },
+          'ChatMLSuccess raw metadata - cycle completion signals'
+        )
+      } else {
+        logger.warn('ChatMLSuccess event has no metadata object')
+      }
+
       const evt = ChatMLSuccess.fromJson(obj)
       await this.opt.onChatMLSuccess?.(evt)
     } catch (err) {

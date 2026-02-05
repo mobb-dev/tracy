@@ -103,9 +103,10 @@ export async function uploadCopilotChanges(
   additions: string,
   model: string,
   responseTime: string,
-  blameType: AiBlameInferenceType = AiBlameInferenceType.Chat
+  blameType: AiBlameInferenceType = AiBlameInferenceType.Chat,
+  sessionId?: string
 ) {
-  logger.info(`Uploading Copilot changes`)
+  logger.info(`Uploading Copilot changes`, { sessionId })
 
   try {
     const config = getConfig()
@@ -123,6 +124,7 @@ export async function uploadCopilotChanges(
         tool: 'Copilot',
         responseTime,
         blameType,
+        sessionId,
         apiUrl: config.apiUrl,
         webAppUrl: config.webAppUrl,
         repositoryUrl,
@@ -137,6 +139,7 @@ export async function uploadCopilotChanges(
         model,
         tool: 'Copilot',
         blameType,
+        sessionId,
         promptsUUID: result.promptsUUID,
         inferenceUUID: result.inferenceUUID,
         promptsCounts: result.promptsCounts.detections,

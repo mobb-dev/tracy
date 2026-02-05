@@ -1,3 +1,5 @@
+import * as os from 'os'
+
 import { PromptItemArray } from '../../mobbdev_src/args/commands/upload_ai_blame'
 
 // Minimal JSON types to represent arbitrary JSON values (no `any` usage)
@@ -30,6 +32,7 @@ export type ChatMLUsage = {
 export type ChatMLMetadata = {
   requestType?: string
   model?: string
+  requestId?: string // identifies generation cycle
   startTime?: string // ISO
   endTime?: string // ISO
   duration?: number // ms
@@ -37,9 +40,19 @@ export type ChatMLMetadata = {
   tools?: ChatMLTool[] // tool schemas vary
 }
 
+export type ChatMLThinkingValue = {
+  type: 'thinking'
+  thinking: {
+    id?: string
+    text?: string
+    encrypted?: string
+  }
+}
+
 export type ChatMLMessageContent = {
   type?: number | string
   text?: string
+  value?: ChatMLThinkingValue // For type=2 (thinking) content
 }
 export type ChatMLToolCall = {
   id: string
@@ -54,6 +67,7 @@ export type ChatMLMessage = {
   role?: number | string
   content?: ChatMLMessageContent[]
   toolCalls?: ChatMLToolCall[]
+  toolCallId?: string // For role 3 (tool) messages - links result to call (camelCase!)
 }
 
 export type ChatMLRequestMessages = {
@@ -72,21 +86,55 @@ export type ChatMLTool = {
   type?: string // usually "function"
 }
 
+/**
+ * Options for constructing a ChatMLSuccess instance.
+ */
+export type ChatMLSuccessOptions = {
+  id: string
+  type: string
+  name?: string // e.g. "panel/editAgent"
+  requestType?: string // metadata.requestType
+  model?: string // metadata.model
+  requestId?: string // metadata.requestId - identifies generation cycle
+  startTime?: Date // from metadata.startTime
+  endTime?: Date // from metadata.endTime
+  durationMs?: number // metadata.duration
+  usage?: ChatMLUsage // metadata.usage
+  toolNames: string[] // derived from metadata.tools[*].function.name
+  requestMessages?: ChatMLRequestMessages // obj.requestMessages
+  raw: unknown // original object for advanced consumers
+}
+
 export class ChatMLSuccess {
-  constructor(
-    public id: string,
-    public type: string,
-    public name: string | undefined, // e.g. "panel/editAgent"
-    public requestType: string | undefined, // metadata.requestType
-    public model: string | undefined, // metadata.model
-    public startTime: Date | undefined, // from metadata.startTime
-    public endTime: Date | undefined, // from metadata.endTime
-    public durationMs: number | undefined, // metadata.duration
-    public usage: ChatMLUsage | undefined, // metadata.usage
-    public toolNames: string[], // derived from metadata.tools[*].function.name
-    public requestMessages: ChatMLRequestMessages | undefined, // obj.requestMessages
-    public raw: unknown // original object for advanced consumers
-  ) {}
+  public readonly id: string
+  public readonly type: string
+  public readonly name: string | undefined
+  public readonly requestType: string | undefined
+  public readonly model: string | undefined
+  public readonly requestId: string | undefined
+  public readonly startTime: Date | undefined
+  public readonly endTime: Date | undefined
+  public readonly durationMs: number | undefined
+  public readonly usage: ChatMLUsage | undefined
+  public readonly toolNames: string[]
+  public readonly requestMessages: ChatMLRequestMessages | undefined
+  public readonly raw: unknown
+
+  constructor(opts: ChatMLSuccessOptions) {
+    this.id = opts.id
+    this.type = opts.type
+    this.name = opts.name
+    this.requestType = opts.requestType
+    this.model = opts.model
+    this.requestId = opts.requestId
+    this.startTime = opts.startTime
+    this.endTime = opts.endTime
+    this.durationMs = opts.durationMs
+    this.usage = opts.usage
+    this.toolNames = opts.toolNames
+    this.requestMessages = opts.requestMessages
+    this.raw = opts.raw
+  }
 
   /**
    * Returns an array of attachment objects for snapshot ingestion.
@@ -214,74 +262,242 @@ export class ChatMLSuccess {
       ? { messages: msgs as ChatMLMessage[] }
       : undefined
 
-    return new ChatMLSuccess(
+    return new ChatMLSuccess({
       id,
       type,
       name,
-      typeof metadata?.requestType === 'string'
-        ? metadata.requestType
-        : undefined,
-      typeof metadata?.model === 'string' ? metadata.model : undefined,
+      requestType:
+        typeof metadata?.requestType === 'string'
+          ? metadata.requestType
+          : undefined,
+      model: typeof metadata?.model === 'string' ? metadata.model : undefined,
+      requestId:
+        typeof metadata?.requestId === 'string'
+          ? metadata.requestId
+          : undefined,
       startTime,
       endTime,
-      Number.isFinite(metadata?.duration as number)
+      durationMs: Number.isFinite(metadata?.duration as number)
         ? (metadata?.duration as number)
         : undefined,
-      metadata?.usage as ChatMLUsage | undefined,
+      usage: metadata?.usage as ChatMLUsage | undefined,
       toolNames,
       requestMessages,
-      objUnknown
-    )
+      raw: objUnknown,
+    })
   }
 
   getPromptData(): PromptItemArray {
-    const result: PromptItemArray = []
     const messages = this.getMessages()
-
     if (!Array.isArray(messages)) {
       return []
     }
 
+    const context = {
+      toolResults: this.collectToolResults(messages),
+      tokens: this.getTokenCounts(),
+      attachedFiles: this.collectAttachedFiles(messages),
+      result: [] as PromptItemArray,
+    }
+
+    for (const message of messages) {
+      this.processMessageByRole(message, context)
+    }
+
+    return context.result
+  }
+
+  /**
+   * Process a message based on its role.
+   * Role 1 = User, Role 2 = AI Assistant, Role 3 = Tool (handled in collectToolResults)
+   */
+  private processMessageByRole(
+    message: ChatMLMessage,
+    context: {
+      toolResults: Map<string, string>
+      tokens: { inputCount: number; outputCount: number } | undefined
+      attachedFiles: Array<{ relativePath: string; startLine?: number }>
+      result: PromptItemArray
+    }
+  ): void {
+    switch (message.role) {
+      case 1:
+        this.processUserMessage(message, context)
+        break
+      case 2:
+        this.processAssistantMessage(message, context)
+        break
+      // Role 3 (tool results) already processed in collectToolResults
+    }
+  }
+
+  /**
+   * Collect tool results from role 3 (tool response) messages.
+   * Maps toolCallId -> result text for later lookup.
+   */
+  private collectToolResults(messages: ChatMLMessage[]): Map<string, string> {
+    const toolResults = new Map<string, string>()
     for (const m of messages) {
-      // Role 1 contains user request.
-      if (m.role === 1) {
-        for (const c of m.content ?? []) {
-          if (c.type !== 1) {
-            continue
-          }
+      if (m.role === 3 && m.toolCallId) {
+        const resultText = (m.content ?? [])
+          .map((c) => c.text ?? '')
+          .filter((t) => t.length > 0)
+          .join('\n')
+        if (resultText) {
+          toolResults.set(m.toolCallId, resultText)
+        }
+      }
+    }
+    return toolResults
+  }
 
-          const text = c.text ?? ''
+  /**
+   * Get token counts from usage metadata.
+   */
+  private getTokenCounts():
+    | { inputCount: number; outputCount: number }
+    | undefined {
+    if (!this.usage) {
+      return undefined
+    }
+    return {
+      inputCount: this.usage.prompt_tokens ?? 0,
+      outputCount: this.usage.completion_tokens ?? 0,
+    }
+  }
 
-          if (text.includes('<userRequest>')) {
-            let userRequest = text.split('<userRequest>', 2)[1]
+  /**
+   * Collect attached file paths from message content.
+   * Converts absolute paths to relative using home directory.
+   */
+  private collectAttachedFiles(
+    messages: ChatMLMessage[]
+  ): Array<{ relativePath: string; startLine?: number }> {
+    const attachedFiles: Array<{ relativePath: string; startLine?: number }> =
+      []
+    const attachmentRegex = /<attachment[^>]*filePath="([^"]*)"[^>]*>/g
+    const homeDir = os.homedir()
 
-            userRequest = userRequest.split('</userRequest>', 2)[0].trim()
-
-            result.push({
-              type: 'USER_PROMPT',
-              text: userRequest,
-              date: new Date(),
-            })
+    for (const m of messages) {
+      for (const c of m.content ?? []) {
+        const text = c.text ?? ''
+        // Use matchAll to avoid stateful regex issues with global flag
+        for (const match of text.matchAll(attachmentRegex)) {
+          const filePath = match[1]
+          if (filePath) {
+            let relativePath = filePath
+            if (homeDir && filePath.startsWith(homeDir)) {
+              relativePath = `~${filePath.slice(homeDir.length)}`
+            }
+            attachedFiles.push({ relativePath })
           }
         }
+      }
+    }
+    return attachedFiles
+  }
 
-        // Role 2 contains AI responses.
-      } else if (m.role === 2) {
-        for (const c of m.content ?? []) {
-          if (c.type !== 1 || !c.text) {
-            continue
-          }
+  /**
+   * Process user message (role 1).
+   * Extracts user prompts, adds tokens and attached files to the first prompt.
+   */
+  private processUserMessage(
+    message: ChatMLMessage,
+    context: {
+      tokens: { inputCount: number; outputCount: number } | undefined
+      attachedFiles: Array<{ relativePath: string; startLine?: number }>
+      result: PromptItemArray
+    }
+  ): void {
+    const { tokens, attachedFiles, result } = context
+    for (const c of message.content ?? []) {
+      if (c.type !== 1) {
+        continue
+      }
 
+      const text = c.text ?? ''
+      if (!text.includes('<userRequest>')) {
+        continue
+      }
+
+      const userRequest = text
+        .split('<userRequest>', 2)[1]
+        .split('</userRequest>', 2)[0]
+        .trim()
+
+      result.push({
+        type: 'USER_PROMPT',
+        text: userRequest,
+        date: new Date(),
+        tokens: result.length === 0 ? tokens : undefined,
+        attachedFiles:
+          result.length === 0 && attachedFiles.length > 0
+            ? attachedFiles
+            : undefined,
+      })
+    }
+  }
+
+  /**
+   * Process assistant message (role 2).
+   * Extracts AI thinking, responses, and tool calls.
+   */
+  private processAssistantMessage(
+    message: ChatMLMessage,
+    context: {
+      toolResults: Map<string, string>
+      result: PromptItemArray
+    }
+  ): void {
+    const { toolResults, result } = context
+    // Extract AI_THINKING from content type 2
+    for (const c of message.content ?? []) {
+      if (c.type === 2 && c.value?.type === 'thinking') {
+        const thinkingText = c.value.thinking?.text
+        if (thinkingText?.trim()) {
           result.push({
-            type: 'AI_RESPONSE',
-            text: c.text,
+            type: 'AI_THINKING',
+            text: thinkingText,
             date: new Date(),
           })
         }
       }
     }
 
-    return result
+    // Extract AI_RESPONSE from content type 1
+    for (const c of message.content ?? []) {
+      if (c.type === 1 && c.text) {
+        result.push({
+          type: 'AI_RESPONSE',
+          text: c.text,
+          date: new Date(),
+        })
+      }
+    }
+
+    // Extract tool calls
+    const toolCalls = message.toolCalls as ChatMLToolCall[] | undefined
+    if (!Array.isArray(toolCalls)) {
+      return
+    }
+
+    for (const tc of toolCalls) {
+      if (!tc.id || !tc.function?.name) {
+        continue
+      }
+
+      result.push({
+        type: 'TOOL_EXECUTION',
+        date: new Date(),
+        tool: {
+          name: tc.function.name,
+          parameters: tc.function.arguments || '{}',
+          result: toolResults.get(tc.id) ?? '',
+          rawArguments: tc.function.arguments,
+          accepted: true,
+        },
+      })
+    }
   }
 
   /** Returns all tool calls found in the messages (for debugging) */
@@ -305,6 +521,39 @@ export class ChatMLSuccess {
       }
     }
     return out
+  }
+
+  /**
+   * Returns all tool call IDs from the messages (both from tool calls and tool results).
+   * Used for correlating with session files to find the real sessionId.
+   */
+  getAllToolCallIds(): string[] {
+    const ids: string[] = []
+    const messages = this.getMessages()
+    if (!Array.isArray(messages)) {
+      return ids
+    }
+
+    for (const m of messages) {
+      // Tool calls from assistant (role 2)
+      const tcs = m?.toolCalls as ChatMLToolCall[] | undefined
+      if (Array.isArray(tcs)) {
+        for (const tc of tcs) {
+          if (typeof tc?.id === 'string' && tc.id) {
+            ids.push(tc.id)
+          }
+        }
+      }
+
+      // Tool results (role 3) - also have toolCallId
+      const toolCallId = (m as { toolCallId?: unknown })?.toolCallId
+      if (typeof toolCallId === 'string' && toolCallId) {
+        ids.push(toolCallId)
+      }
+    }
+
+    // Return unique IDs
+    return [...new Set(ids)]
   }
 
   /** Returns all tool call ids whose function.name is in names (order preserved) */

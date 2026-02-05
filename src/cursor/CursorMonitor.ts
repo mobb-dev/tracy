@@ -30,11 +30,11 @@ export class CursorMonitor extends BaseMonitor {
 
   async start(): Promise<void> {
     if (this._isRunning) {
-      logger.info(`${this.name} is already running`)
+      logger.debug(`${this.name} is already running`)
       return
     }
 
-    logger.info(`Starting ${this.name}`)
+    logger.debug(`Starting ${this.name}`)
 
     try {
       // Fetch only completed file edits (bubbles with codeblockId)
@@ -46,7 +46,7 @@ export class CursorMonitor extends BaseMonitor {
       this.abortController = new AbortController()
       this.pollingPromise = this.poll()
 
-      logger.info(`${this.name} started successfully`)
+      logger.debug(`${this.name} started successfully`)
     } catch (err) {
       // Checkpoint failures during startup are recoverable - start polling anyway
       // The poll loop will retry and eventually succeed
@@ -75,7 +75,7 @@ export class CursorMonitor extends BaseMonitor {
       return
     }
 
-    logger.info(`Stopping ${this.name}`)
+    logger.debug(`Stopping ${this.name}`)
     this._isRunning = false
 
     if (this.abortController) {
@@ -95,7 +95,7 @@ export class CursorMonitor extends BaseMonitor {
       this.pollingPromise = null
     }
 
-    logger.info(`${this.name} stopped`)
+    logger.debug(`${this.name} stopped`)
   }
 
   private async poll(): Promise<void> {

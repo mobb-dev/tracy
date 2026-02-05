@@ -91,7 +91,7 @@ export async function initDB(context: vscode.ExtensionContext): Promise<void> {
   // Establish initial connection
   getConnection()
 
-  logger.info(
+  logger.debug(
     `[db.ts] Database initialized: ${dbPath} (Node ${process.version})`
   )
 }
@@ -102,7 +102,7 @@ export async function initDB(context: vscode.ExtensionContext): Promise<void> {
 export async function closeDB(): Promise<void> {
   closeConnection()
   dbPath = null
-  logger.info('[db.ts] Database module closed')
+  logger.debug('[db.ts] Database module closed')
 }
 
 /**

@@ -1,3 +1,5 @@
+import { setTimeout } from 'node:timers/promises'
+
 import * as fs from 'fs'
 import * as path from 'path'
 import * as vscode from 'vscode'
@@ -113,7 +115,7 @@ async function waitForWorkspaceFolder(
     if (folder) {
       return folder
     }
-    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
+    await setTimeout(pollIntervalMs)
   }
 
   return null

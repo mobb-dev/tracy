@@ -206,7 +206,7 @@ export class LogContextWatcher {
     for (const line of lines) {
       try {
         const record = LogContextRecord.fromJson(line)
-        logger.info(`Parsed log context record: ${record.event.requestId}`)
+        logger.debug(`Parsed log context record: ${record.event.requestId}`)
 
         // Log to disk for inspection
         logJsonToFile(

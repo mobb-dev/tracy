@@ -35,6 +35,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['__tests__/**/*.test.ts'],
+    exclude: ['__tests__/e2e/**', 'node_modules/**'],
     setupFiles: ['__tests__/setupEnv.ts', '__tests__/setupMocks.ts'],
     reporters: ['default'],
     deps: {

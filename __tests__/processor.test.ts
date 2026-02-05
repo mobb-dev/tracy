@@ -24,6 +24,7 @@ vi.mock('../src/shared/logger', () => {
     logger: {
       info: vi.fn(),
       error: vi.fn(),
+      debug: vi.fn(),
     },
   }
 })
