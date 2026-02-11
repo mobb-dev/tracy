@@ -121,10 +121,9 @@ echo -e "  API URL: $API_URL"
 echo -e "  Web URL: $WEB_URL"
 echo ""
 
-# Backup original package.json and package-lock.json
-echo "Backing up package.json and package-lock.json..."
+# Backup original package.json
+echo "Backing up package.json..."
 cp package.json package.json.bak
-cp package-lock.json package-lock.json.bak
 
 # Backup existing .env if present
 if [[ -f .env ]]; then
@@ -137,10 +136,6 @@ cleanup() {
     if [[ -f package.json.bak ]]; then
         mv package.json.bak package.json
         echo "Restored original package.json"
-    fi
-    if [[ -f package-lock.json.bak ]]; then
-        mv package-lock.json.bak package-lock.json
-        echo "Restored original package-lock.json"
     fi
     if [[ -f .env.bak ]]; then
         mv .env.bak .env

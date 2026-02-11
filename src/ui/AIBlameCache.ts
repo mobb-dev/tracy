@@ -540,10 +540,6 @@ export async function analyzeCommitForExtensionAIBlameWrapper(
       repositoryURL,
       // Note: commitDiff is no longer sent - backend reads from S3
       commitTimestamp: localCommitData?.timestamp.toISOString(),
-      parentCommits: localCommitData?.parentCommits?.map((p) => ({
-        sha: p.sha,
-        timestamp: p.timestamp.toISOString(),
-      })),
     }
 
     const result = await gqlClient.analyzeCommitForExtensionAIBlame(variables)
