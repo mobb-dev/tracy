@@ -4,7 +4,20 @@ import { SegmentClassification } from '../src/human/types'
 import type { HumanSegmentUpload } from '../src/human/uploader'
 import { uploadHumanChangesFromExtension } from '../src/human/uploader'
 
-vi.mock('vscode', () => ({}))
+vi.mock('vscode', () => ({
+  workspace: { workspaceFolders: [] },
+}))
+
+vi.mock('../src/shared/repositoryInfo', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../src/shared/repositoryInfo')>()
+  return {
+    ...actual,
+    getNormalizedGitHubRepoUrl: vi
+      .fn()
+      .mockResolvedValue('https://github.com/test-org/test-repo'),
+  }
+})
 
 vi.mock('../src/shared/config', () => ({
   getConfig: vi.fn().mockReturnValue({

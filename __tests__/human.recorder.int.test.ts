@@ -31,7 +31,19 @@ vi.mock('vscode', () => {
     workspace: {
       textDocuments: textDocs,
       asRelativePath: (_uri: unknown) => 'file.ts',
+      workspaceFolders: [],
     },
+  }
+})
+
+vi.mock('../src/shared/repositoryInfo', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../src/shared/repositoryInfo')>()
+  return {
+    ...actual,
+    getNormalizedGitHubRepoUrl: vi
+      .fn()
+      .mockResolvedValue('https://github.com/test-org/test-repo'),
   }
 })
 
