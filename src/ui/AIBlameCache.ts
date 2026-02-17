@@ -8,6 +8,7 @@ import {
   GetTracyDiffUploadUrlMutationVariables,
   Status,
   StreamBlameAiAnalysisRequestsDocument,
+  StreamCommitBlameRequestsDocument,
 } from '../mobbdev_src/features/analysis/scm/generates/client_generates'
 import {
   GitService,
@@ -15,7 +16,7 @@ import {
 } from '../mobbdev_src/features/analysis/scm/services/GitService'
 import { uploadFile } from '../mobbdev_src/features/analysis/upload-file'
 import { configStore } from '../mobbdev_src/utils/ConfigStoreService'
-import { subscribeToBlameAiAnalysisRequests } from '../mobbdev_src/utils/subscribe/subscribe'
+import { subscribeToBlameRequests } from '../mobbdev_src/utils/subscribe/subscribe'
 import { getConfig } from '../shared/config'
 import { createGQLClient } from '../shared/gqlClientFactory'
 import { logger } from '../shared/logger'
@@ -54,6 +55,31 @@ export type AIBlameAttributionList = AIBlameAttribution[]
 // Simple size-capped cache using Map (preserves insertion order for eviction)
 const MAX_ATTRIBUTION_CACHE_SIZE = 200
 const MAX_PROMPT_CACHE_SIZE = 50
+const MAX_RESOLVE_ITERATIONS = 10
+const SUBSCRIPTION_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
+
+type ProcessAIBlameFinalResult = Extract<
+  NonNullable<
+    AnalyzeCommitForExtensionAiBlameMutation['analyzeCommitForAIBlame']
+  >,
+  { __typename: 'ProcessAIBlameFinalResult' }
+>
+
+function mapAttributions(
+  response: ProcessAIBlameFinalResult
+): AIBlameAttributionList {
+  return response.attributions.map((attr) => ({
+    id: attr.id,
+    aiBlameCommitId: attr.aiBlameCommitId,
+    aiBlameInferenceId: attr.aiBlameInferenceId,
+    filePath: attr.filePath,
+    lineNumber: attr.lineNumber,
+    model: attr.model ?? 'unknown-model',
+    toolName: attr.toolName ?? 'unknown-tool',
+    commitSha: attr.commitSha,
+    type: attr.inferenceType,
+  }))
+}
 
 export class AIBlameCache {
   private attributionCache = new Map<string, AIBlameAttributionList>()
@@ -231,6 +257,158 @@ export class AIBlameCache {
     cache.set(key, value)
   }
 
+  private waitForBlameCompletion(
+    requestIds: string[],
+    commitBlameRequestIds: string[],
+    commitSha: string
+  ): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let settled = false
+      let timeoutId: ReturnType<typeof setTimeout> | undefined
+      let unsubscribe: (() => void) | undefined
+
+      const finalize = (error?: Error) => {
+        if (settled) {
+          return
+        }
+        settled = true
+        if (timeoutId) {
+          clearTimeout(timeoutId)
+          timeoutId = undefined
+        }
+        try {
+          unsubscribe?.()
+          unsubscribe = undefined
+        } catch (e) {
+          logger.error(
+            { error: e, commitSha },
+            `AIBlameCache: Error while unsubscribing for commit ${commitSha}`
+          )
+        }
+        if (error) {
+          reject(error)
+        } else {
+          resolve()
+        }
+      }
+
+      const apiToken = configStore.get('apiToken') as string
+
+      unsubscribe = subscribeToBlameRequests({
+        blameAiRequestIds: requestIds,
+        commitBlameRequestIds,
+        config: {
+          auth: {
+            mobbApiKey: apiToken,
+          },
+          graphqlEndpoint: getConfig().apiUrl.replace('http', 'ws'),
+          websocketImpl: WebSocket,
+        },
+        callbacks: {
+          onSuccess: () => {
+            logger.info(
+              `AIBlameCache: Analysis completed for commit ${commitSha}`
+            )
+            finalize()
+          },
+          onError: (error: string) => {
+            logger.error(
+              `AIBlameCache: Subscription error for commit ${commitSha}: ${error}`
+            )
+            finalize(new Error(error))
+          },
+          onBlameAiUpdate: (requests) => {
+            logger.info(
+              `AIBlameCache: AI blame update for commit ${commitSha}: ${requests.length} requests, states: ${requests.map((r) => r.state).join(', ')}`
+            )
+          },
+          onCommitBlameUpdate: (requests) => {
+            logger.info(
+              `AIBlameCache: Commit blame update for commit ${commitSha}: ${requests.length} requests, states: ${requests.map((r) => r.state).join(', ')}`
+            )
+          },
+        },
+        blameAiDocument: StreamBlameAiAnalysisRequestsDocument,
+        commitBlameDocument: StreamCommitBlameRequestsDocument,
+        requestedState: Blame_Ai_Analysis_Request_State_Enum.Requested,
+        errorState: Blame_Ai_Analysis_Request_State_Enum.Error,
+      })
+
+      timeoutId = setTimeout(() => {
+        logger.warn(
+          `AIBlameCache: Subscription timeout for commit ${commitSha}`
+        )
+        finalize(new Error('Subscription timeout'))
+      }, SUBSCRIPTION_TIMEOUT_MS)
+    })
+  }
+
+  private async resolveBlameResult(
+    commitSha: string,
+    localCommitData?: LocalCommitData
+  ): Promise<AIBlameAttributionList | null> {
+    for (let i = 0; i < MAX_RESOLVE_ITERATIONS; i++) {
+      const result = await analyzeCommitForExtensionAIBlameWrapper(
+        commitSha,
+        this.organizationId,
+        this.repoUrl,
+        localCommitData
+      )
+
+      const response = result.analyzeCommitForAIBlame
+
+      if (!response) {
+        logger.error(`AIBlameCache: No response for commit ${commitSha}`)
+        return null
+      }
+
+      if (response.__typename === 'ProcessAIBlameErrorResult') {
+        logger.error(
+          `AIBlameCache: Error analyzing commit ${commitSha}: ${response.error}`
+        )
+        return null
+      }
+
+      if (response.__typename === 'ProcessAIBlameFinalResult') {
+        const attributions = mapAttributions(response)
+        logger.info(
+          `AIBlameCache: Final result for commit ${commitSha}, attributions=${attributions.length}`
+        )
+        return attributions
+      }
+
+      if (response.__typename === 'ProcessAIBlameRequestedResult') {
+        logger.info(
+          `AIBlameCache: Analysis for commit ${commitSha} is pending (iteration=${i + 1}, status=${response.status}, requestIds=${response.requestIds.join(',')}, commitBlameRequestIds=${response.commitBlameRequestIds.join(',')}) - subscribing for updates`
+        )
+
+        // Ensure we have a valid auth client for subscription
+        await createGQLClient()
+
+        try {
+          await this.waitForBlameCompletion(
+            response.requestIds,
+            response.commitBlameRequestIds,
+            commitSha
+          )
+        } catch (error) {
+          logger.error(
+            { error, commitSha },
+            `AIBlameCache: Subscription failed for commit ${commitSha}`
+          )
+          return null
+        }
+
+        // Loop continues — re-call mutation to check the new state
+      }
+    }
+
+    logger.error(
+      `AIBlameCache: Max iterations (${MAX_RESOLVE_ITERATIONS}) reached for commit ${commitSha}`
+    )
+    return null
+  }
+
   private async analyzeCommit(
     commitSha: string
   ): Promise<AIBlameAttributionList | null> {
@@ -262,191 +440,7 @@ export class AIBlameCache {
         }
       }
 
-      // First, initiate the analysis
-      const result = await analyzeCommitForExtensionAIBlameWrapper(
-        commitSha,
-        this.organizationId,
-        this.repoUrl,
-        localCommitData
-      )
-
-      const response = result.analyzeCommitForAIBlame
-
-      if (!response) {
-        logger.error(`AIBlameCache: No response for commit ${commitSha}`)
-        return null
-      }
-
-      if (response.__typename === 'ProcessAIBlameErrorResult') {
-        logger.error(
-          `AIBlameCache: Error analyzing commit ${commitSha}: ${response.error}`
-        )
-        return null
-      }
-
-      if (response.__typename === 'ProcessAIBlameFinalResult') {
-        // Analysis is already complete - return results immediately
-        const attributions: AIBlameAttributionList = response.attributions.map(
-          (attr) => {
-            return {
-              id: attr.id,
-              aiBlameCommitId: attr.aiBlameCommitId,
-              aiBlameInferenceId: attr.aiBlameInferenceId,
-              filePath: attr.filePath,
-              lineNumber: attr.lineNumber,
-              model: attr.model ?? 'unknown-model',
-              toolName: attr.toolName ?? 'unknown-tool',
-              commitSha: attr.commitSha,
-              type: attr.inferenceType,
-            }
-          }
-        )
-
-        logger.info(
-          `AIBlameCache: Final result for commit ${commitSha}, attributions=${attributions.length}`
-        )
-        return attributions
-      }
-
-      if (response.__typename === 'ProcessAIBlameRequestedResult') {
-        // Analysis is pending - use subscription to wait for completion
-        logger.info(
-          `AIBlameCache: Analysis for commit ${commitSha} is pending (status=${response.status}, requestIds=${response.requestIds.join(
-            ','
-          )}) - subscribing for updates`
-        )
-
-        // Get authentication client for subscription first
-        await createGQLClient()
-
-        // Get the API token from config store (guaranteed to be valid after successful auth)
-        const apiToken = configStore.get('apiToken') as string
-
-        return new Promise<AIBlameAttributionList | null>((resolve) => {
-          let settled = false
-          let timeoutId: ReturnType<typeof setTimeout> | undefined
-          let unsubscribe: (() => void) | undefined
-
-          const finalize = (value: AIBlameAttributionList | null) => {
-            if (settled) {
-              return
-            }
-            settled = true
-            if (timeoutId) {
-              clearTimeout(timeoutId)
-              timeoutId = undefined
-            }
-            try {
-              unsubscribe?.()
-              // Prevent double-unsubscribe and satisfy prefer-const by making it mutable.
-              unsubscribe = undefined
-            } catch (e) {
-              // Best-effort cleanup. Avoid throwing from cleanup path.
-              logger.error(
-                { error: e, commitSha },
-                `AIBlameCache: Error while unsubscribing for commit ${commitSha}`
-              )
-            }
-            resolve(value)
-          }
-
-          unsubscribe = subscribeToBlameAiAnalysisRequests({
-            requestIds: response.requestIds,
-            config: {
-              auth: {
-                mobbApiKey: apiToken,
-              },
-              graphqlEndpoint: getConfig().apiUrl.replace('http', 'ws'),
-              websocketImpl: WebSocket,
-            },
-            callbacks: {
-              onSuccess: async () => {
-                logger.info(
-                  `AIBlameCache: Analysis completed for commit ${commitSha}`
-                )
-
-                // Fetch the final results
-                try {
-                  const finalResult =
-                    await analyzeCommitForExtensionAIBlameWrapper(
-                      commitSha,
-                      this.organizationId,
-                      this.repoUrl
-                    )
-
-                  const finalResponse = finalResult.analyzeCommitForAIBlame
-
-                  if (
-                    finalResponse?.__typename === 'ProcessAIBlameFinalResult'
-                  ) {
-                    const attributions: AIBlameAttributionList =
-                      finalResponse.attributions.map((attr) => ({
-                        id: attr.id,
-                        aiBlameCommitId: attr.aiBlameCommitId,
-                        aiBlameInferenceId: attr.aiBlameInferenceId,
-                        filePath: attr.filePath,
-                        lineNumber: attr.lineNumber,
-                        model: attr.model ?? 'unknown-model',
-                        toolName: attr.toolName ?? 'unknown-tool',
-                        commitSha: attr.commitSha,
-                        type: attr.inferenceType,
-                      }))
-
-                    logger.info(
-                      `AIBlameCache: Final result for commit ${commitSha}, attributions=${attributions.length}`
-                    )
-                    finalize(attributions)
-                  } else if (
-                    finalResponse?.__typename === 'ProcessAIBlameErrorResult'
-                  ) {
-                    logger.error(
-                      `AIBlameCache: ProcessAIBlameErrorResult for commit ${commitSha}: ${finalResponse.error}`
-                    )
-                    finalize(null)
-                  } else {
-                    logger.error(
-                      `AIBlameCache: Unexpected response type after completion: ${finalResponse?.__typename}`
-                    )
-                    finalize(null)
-                  }
-                } catch (error) {
-                  logger.error(
-                    { error, commitSha },
-                    `AIBlameCache: Error fetching final results for commit ${commitSha}`
-                  )
-                  finalize(null)
-                }
-              },
-              onError: (error: string) => {
-                logger.error(
-                  `AIBlameCache: Subscription error for commit ${commitSha}: ${error}`
-                )
-                finalize(null)
-              },
-              onUpdate: (requests: Array<{ state: string }>) => {
-                logger.info(
-                  `AIBlameCache: Subscription update for commit ${commitSha}: ${requests.length} requests, states: ${requests.map((r) => r.state).join(', ')}`
-                )
-              },
-            },
-            blameAiDocument: StreamBlameAiAnalysisRequestsDocument,
-            commitBlameDocument: StreamBlameAiAnalysisRequestsDocument, // Same document since only using AI analysis
-            requestedState: Blame_Ai_Analysis_Request_State_Enum.Requested,
-            errorState: Blame_Ai_Analysis_Request_State_Enum.Error,
-          })
-
-          // Set up a timeout to prevent infinite waiting
-          timeoutId = setTimeout(
-            () => {
-              logger.warn(
-                `AIBlameCache: Subscription timeout for commit ${commitSha}`
-              )
-              finalize(null)
-            },
-            5 * 60 * 1000
-          ) // 5 minutes timeout
-        })
-      }
+      return await this.resolveBlameResult(commitSha, localCommitData)
     } catch (error) {
       logger.error(
         { error, commitSha },
