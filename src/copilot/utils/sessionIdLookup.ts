@@ -5,6 +5,7 @@ import * as path from 'path'
 import * as vscode from 'vscode'
 
 import { logger } from '../../shared/logger'
+import { makeStableId } from './ids'
 
 /**
  * On-demand lookup of sessionId from VS Code chat session files.
@@ -119,6 +120,18 @@ export class SessionIdLookup {
       return null
     }
 
+    // Build search IDs: include both raw and stable (without __vscode- suffix)
+    // VS Code appends __vscode-{timestamp} to tool call IDs but session files
+    // store the bare ID from the LLM provider.
+    const searchIds = new Set<string>()
+    for (const id of toolCallIds) {
+      searchIds.add(id)
+      const stable = makeStableId(id)
+      if (stable !== id && stable.length > 0) {
+        searchIds.add(stable)
+      }
+    }
+
     // Search recent files for matching tool call ID
     for (const filePath of recentFiles) {
       let content: string
@@ -128,11 +141,20 @@ export class SessionIdLookup {
         continue
       }
 
-      for (const toolCallId of toolCallIds) {
+      for (const toolCallId of searchIds) {
         if (content.includes(toolCallId)) {
           try {
-            const session = JSON.parse(content) as { sessionId?: unknown }
-            const { sessionId } = session
+            // VS Code Copilot uses .jsonl (JSON Lines) where the first line
+            // contains session metadata including sessionId. Tool call data
+            // appears on subsequent lines. Cursor uses .json with a single
+            // JSON object. Handle both formats.
+            const firstLine = content.split('\n')[0]
+            const session = JSON.parse(firstLine) as {
+              sessionId?: unknown
+              v?: { sessionId?: unknown }
+            }
+            // .jsonl wraps data in {kind, v: {sessionId, ...}}
+            const sessionId = session.v?.sessionId ?? session.sessionId
 
             if (typeof sessionId === 'string') {
               return sessionId
@@ -201,7 +223,7 @@ export class SessionIdLookup {
       try {
         const files = await fs.promises.readdir(dir)
         for (const file of files) {
-          if (!file.endsWith('.json')) {
+          if (!file.endsWith('.json') && !file.endsWith('.jsonl')) {
             continue
           }
 
