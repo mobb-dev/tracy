@@ -17,6 +17,7 @@ import {
 import { uploadFile } from '../mobbdev_src/features/analysis/upload-file'
 import { configStore } from '../mobbdev_src/utils/ConfigStoreService'
 import { subscribeToBlameRequests } from '../mobbdev_src/utils/subscribe/subscribe'
+import { httpToWsUrl } from '../mobbdev_src/utils/url'
 import { getConfig } from '../shared/config'
 import { createGQLClient } from '../shared/gqlClientFactory'
 import { logger } from '../shared/logger'
@@ -301,7 +302,7 @@ export class AIBlameCache {
           auth: {
             mobbApiKey: apiToken,
           },
-          graphqlEndpoint: getConfig().apiUrl.replace('http', 'ws'),
+          graphqlEndpoint: httpToWsUrl(getConfig().apiUrl),
           websocketImpl: WebSocket,
         },
         callbacks: {
