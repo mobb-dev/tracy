@@ -93,9 +93,8 @@ describe('TracyInfoPanel', () => {
       }))
 
       const { InfoPanel } = await import('../src/ui/TracyInfoPanel')
-      const { infoPanelTemplate } = await import(
-        '../src/webview/templates/panels/infoPanel'
-      )
+      const { infoPanelTemplate } =
+        await import('../src/webview/templates/panels/infoPanel')
 
       const panel = new InfoPanel(mockAIBlameCache as any, mockGetCtx, vi.fn())
 
@@ -131,9 +130,8 @@ describe('TracyInfoPanel', () => {
 
       const { InfoPanel } = await import('../src/ui/TracyInfoPanel')
       const { logger } = await import('../src/shared/logger')
-      const { infoPanelTemplate } = await import(
-        '../src/webview/templates/panels/infoPanel'
-      )
+      const { infoPanelTemplate } =
+        await import('../src/webview/templates/panels/infoPanel')
 
       const panel = new InfoPanel(mockAIBlameCache as any, mockGetCtx, vi.fn())
 
@@ -206,9 +204,8 @@ describe('TracyInfoPanel', () => {
       }))
 
       const { InfoPanel } = await import('../src/ui/TracyInfoPanel')
-      const { infoPanelTemplate } = await import(
-        '../src/webview/templates/panels/infoPanel'
-      )
+      const { infoPanelTemplate } =
+        await import('../src/webview/templates/panels/infoPanel')
 
       const panel = new InfoPanel(mockAIBlameCache as any, mockGetCtx, vi.fn())
 
@@ -249,9 +246,8 @@ describe('TracyInfoPanel', () => {
       }))
 
       const { InfoPanel } = await import('../src/ui/TracyInfoPanel')
-      const { infoPanelTemplate } = await import(
-        '../src/webview/templates/panels/infoPanel'
-      )
+      const { infoPanelTemplate } =
+        await import('../src/webview/templates/panels/infoPanel')
 
       const panel = new InfoPanel(mockAIBlameCache as any, mockGetCtx, vi.fn())
 
@@ -500,9 +496,8 @@ describe('TracyInfoPanel', () => {
       }))
 
       const { InfoPanel } = await import('../src/ui/TracyInfoPanel')
-      const { infoPanelTemplate } = await import(
-        '../src/webview/templates/panels/infoPanel'
-      )
+      const { infoPanelTemplate } =
+        await import('../src/webview/templates/panels/infoPanel')
 
       const panel = new InfoPanel(mockAIBlameCache as any, mockGetCtx, vi.fn())
       await panel.show()
@@ -540,9 +535,8 @@ describe('TracyInfoPanel', () => {
       }))
 
       const { InfoPanel } = await import('../src/ui/TracyInfoPanel')
-      const { infoPanelTemplate } = await import(
-        '../src/webview/templates/panels/infoPanel'
-      )
+      const { infoPanelTemplate } =
+        await import('../src/webview/templates/panels/infoPanel')
 
       const panel = new InfoPanel(mockAIBlameCache as any, mockGetCtx, vi.fn())
       await panel.show()
@@ -580,9 +574,8 @@ describe('TracyInfoPanel', () => {
       }))
 
       const { InfoPanel } = await import('../src/ui/TracyInfoPanel')
-      const { infoPanelTemplate } = await import(
-        '../src/webview/templates/panels/infoPanel'
-      )
+      const { infoPanelTemplate } =
+        await import('../src/webview/templates/panels/infoPanel')
 
       const panel = new InfoPanel(mockAIBlameCache as any, mockGetCtx, vi.fn())
       await panel.show()

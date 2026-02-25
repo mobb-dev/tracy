@@ -38,9 +38,8 @@ describe('TracyStatusBar', () => {
 
   describe('state rendering', () => {
     it('renders loading state correctly', async () => {
-      const { StatusBarView, LineState } = await import(
-        '../src/ui/TracyStatusBar'
-      )
+      const { StatusBarView, LineState } =
+        await import('../src/ui/TracyStatusBar')
 
       const view = new StatusBarView(mockStatusBarItem as any)
       view.refresh(LineState.LOADING)
@@ -51,9 +50,8 @@ describe('TracyStatusBar', () => {
     })
 
     it('renders AI state correctly', async () => {
-      const { StatusBarView, LineState } = await import(
-        '../src/ui/TracyStatusBar'
-      )
+      const { StatusBarView, LineState } =
+        await import('../src/ui/TracyStatusBar')
 
       const view = new StatusBarView(mockStatusBarItem as any)
       view.refresh(LineState.AI)
@@ -67,9 +65,8 @@ describe('TracyStatusBar', () => {
     })
 
     it('renders human state correctly', async () => {
-      const { StatusBarView, LineState } = await import(
-        '../src/ui/TracyStatusBar'
-      )
+      const { StatusBarView, LineState } =
+        await import('../src/ui/TracyStatusBar')
 
       const view = new StatusBarView(mockStatusBarItem as any)
       view.refresh(LineState.HUMAN)
@@ -82,9 +79,8 @@ describe('TracyStatusBar', () => {
     })
 
     it('renders no data state correctly', async () => {
-      const { StatusBarView, LineState } = await import(
-        '../src/ui/TracyStatusBar'
-      )
+      const { StatusBarView, LineState } =
+        await import('../src/ui/TracyStatusBar')
 
       const view = new StatusBarView(mockStatusBarItem as any)
       view.refresh(LineState.NO_ATTRIBUTION_DATA)
@@ -97,9 +93,8 @@ describe('TracyStatusBar', () => {
     })
 
     it('renders error state correctly', async () => {
-      const { StatusBarView, LineState } = await import(
-        '../src/ui/TracyStatusBar'
-      )
+      const { StatusBarView, LineState } =
+        await import('../src/ui/TracyStatusBar')
 
       const view = new StatusBarView(mockStatusBarItem as any)
       view.refresh(LineState.ATTRIBUTION_ERROR)
@@ -110,9 +105,8 @@ describe('TracyStatusBar', () => {
     })
 
     it('renders no file selected error state correctly', async () => {
-      const { StatusBarView, LineState } = await import(
-        '../src/ui/TracyStatusBar'
-      )
+      const { StatusBarView, LineState } =
+        await import('../src/ui/TracyStatusBar')
 
       const view = new StatusBarView(mockStatusBarItem as any)
       view.refresh(LineState.NO_FILE_SELECTED_ERROR)
@@ -157,9 +151,8 @@ describe('TracyStatusBar', () => {
 
   describe('markdown generation', () => {
     it('generates proper markdown structure', async () => {
-      const { StatusBarView, LineState } = await import(
-        '../src/ui/TracyStatusBar'
-      )
+      const { StatusBarView, LineState } =
+        await import('../src/ui/TracyStatusBar')
 
       const view = new StatusBarView(mockStatusBarItem as any)
       view.refresh(LineState.AI)
@@ -178,9 +171,8 @@ describe('TracyStatusBar', () => {
     })
 
     it('generates markdown without context when none provided', async () => {
-      const { StatusBarView, LineState } = await import(
-        '../src/ui/TracyStatusBar'
-      )
+      const { StatusBarView, LineState } =
+        await import('../src/ui/TracyStatusBar')
 
       const view = new StatusBarView(mockStatusBarItem as any)
       view.refresh(LineState.LOADING)
@@ -196,9 +188,8 @@ describe('TracyStatusBar', () => {
     })
 
     it('sets markdown properties correctly', async () => {
-      const { StatusBarView, LineState } = await import(
-        '../src/ui/TracyStatusBar'
-      )
+      const { StatusBarView, LineState } =
+        await import('../src/ui/TracyStatusBar')
 
       const view = new StatusBarView(mockStatusBarItem as any)
       view.refresh(LineState.AI)
@@ -247,9 +238,8 @@ describe('TracyStatusBar dev mode detection', () => {
       EXTENSION_NAME: 'mobb-ai-tracer-dev',
     }))
 
-    const { StatusBarView, LineState } = await import(
-      '../src/ui/TracyStatusBar'
-    )
+    const { StatusBarView, LineState } =
+      await import('../src/ui/TracyStatusBar')
 
     const view = new StatusBarView(mockStatusBarItem as any)
     view.refresh(LineState.AI)
@@ -270,9 +260,8 @@ describe('TracyStatusBar dev mode detection', () => {
       EXTENSION_NAME: 'mobb-ai-tracer',
     }))
 
-    const { StatusBarView, LineState } = await import(
-      '../src/ui/TracyStatusBar'
-    )
+    const { StatusBarView, LineState } =
+      await import('../src/ui/TracyStatusBar')
 
     const view = new StatusBarView(mockStatusBarItem as any)
     view.refresh(LineState.AI)

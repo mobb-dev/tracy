@@ -56,9 +56,8 @@ describe('Human uploader artifacts', () => {
       segmentClassification: SegmentClassification.HUMAN_POSITIVE,
     }
 
-    const { uploadAiBlameHandlerFromExtension } = await import(
-      '../src/mobbdev_src/args/commands/upload_ai_blame'
-    )
+    const { uploadAiBlameHandlerFromExtension } =
+      await import('../src/mobbdev_src/args/commands/upload_ai_blame')
 
     await uploadHumanChangesFromExtension(segment)
 

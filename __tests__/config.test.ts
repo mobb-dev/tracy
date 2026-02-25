@@ -189,9 +189,8 @@ describe('config module', () => {
 
   describe('hasRelevantConfigurationChanged', () => {
     it('returns true when apiUrl configuration changes', async () => {
-      const { hasRelevantConfigurationChanged } = await import(
-        '../src/shared/config'
-      )
+      const { hasRelevantConfigurationChanged } =
+        await import('../src/shared/config')
 
       const mockEvent = {
         affectsConfiguration: (section: string) =>
@@ -202,9 +201,8 @@ describe('config module', () => {
     })
 
     it('returns true when webAppUrl configuration changes', async () => {
-      const { hasRelevantConfigurationChanged } = await import(
-        '../src/shared/config'
-      )
+      const { hasRelevantConfigurationChanged } =
+        await import('../src/shared/config')
 
       const mockEvent = {
         affectsConfiguration: (section: string) =>
@@ -215,9 +213,8 @@ describe('config module', () => {
     })
 
     it('returns false when unrelated configuration changes', async () => {
-      const { hasRelevantConfigurationChanged } = await import(
-        '../src/shared/config'
-      )
+      const { hasRelevantConfigurationChanged } =
+        await import('../src/shared/config')
 
       const mockEvent = {
         affectsConfiguration: (section: string) =>

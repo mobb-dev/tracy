@@ -175,9 +175,8 @@ describe('AIBlameCache', () => {
           .mockResolvedValue({ ai_blame_inference: [] }),
       }
 
-      const { getAuthenticatedGQLClient } = await import(
-        '../src/mobbdev_src/commands/handleMobbLogin'
-      )
+      const { getAuthenticatedGQLClient } =
+        await import('../src/mobbdev_src/commands/handleMobbLogin')
       ;(getAuthenticatedGQLClient as any).mockResolvedValue(mockGqlClient)
 
       const { createGQLClient } = await import('../src/shared/gqlClientFactory')
@@ -208,9 +207,8 @@ describe('AIBlameCache', () => {
 
   describe('error handling', () => {
     it('handles network errors gracefully', async () => {
-      const { getAuthenticatedGQLClient } = await import(
-        '../src/mobbdev_src/commands/handleMobbLogin'
-      )
+      const { getAuthenticatedGQLClient } =
+        await import('../src/mobbdev_src/commands/handleMobbLogin')
       ;(getAuthenticatedGQLClient as any).mockRejectedValue(
         new Error('Network error')
       )
@@ -258,9 +256,8 @@ describe('AIBlameCache', () => {
         }),
       }
 
-      const { getAuthenticatedGQLClient } = await import(
-        '../src/mobbdev_src/commands/handleMobbLogin'
-      )
+      const { getAuthenticatedGQLClient } =
+        await import('../src/mobbdev_src/commands/handleMobbLogin')
       ;(getAuthenticatedGQLClient as any).mockResolvedValue(mockGqlClient)
 
       const { AIBlameCache } = await import('../src/ui/AIBlameCache')

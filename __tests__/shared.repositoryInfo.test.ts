@@ -36,9 +36,8 @@ describe('detectAppType', () => {
   it('detects Visual Studio Code correctly', async () => {
     mockVSCode.env.appName = 'Visual Studio Code'
 
-    const { detectAppType, AppType } = await import(
-      '../src/shared/repositoryInfo'
-    )
+    const { detectAppType, AppType } =
+      await import('../src/shared/repositoryInfo')
 
     expect(detectAppType()).toBe(AppType.VSCODE)
   })
@@ -46,9 +45,8 @@ describe('detectAppType', () => {
   it('detects VSCode with different casing', async () => {
     mockVSCode.env.appName = 'visual studio code - insiders'
 
-    const { detectAppType, AppType } = await import(
-      '../src/shared/repositoryInfo'
-    )
+    const { detectAppType, AppType } =
+      await import('../src/shared/repositoryInfo')
 
     expect(detectAppType()).toBe(AppType.VSCODE)
   })
@@ -56,9 +54,8 @@ describe('detectAppType', () => {
   it('detects Cursor correctly', async () => {
     mockVSCode.env.appName = 'Cursor'
 
-    const { detectAppType, AppType } = await import(
-      '../src/shared/repositoryInfo'
-    )
+    const { detectAppType, AppType } =
+      await import('../src/shared/repositoryInfo')
 
     expect(detectAppType()).toBe(AppType.CURSOR)
   })
@@ -66,9 +63,8 @@ describe('detectAppType', () => {
   it('detects Cursor with different casing', async () => {
     mockVSCode.env.appName = 'cursor - the ai editor'
 
-    const { detectAppType, AppType } = await import(
-      '../src/shared/repositoryInfo'
-    )
+    const { detectAppType, AppType } =
+      await import('../src/shared/repositoryInfo')
 
     expect(detectAppType()).toBe(AppType.CURSOR)
   })
@@ -76,9 +72,8 @@ describe('detectAppType', () => {
   it('returns UNKNOWN for unrecognized apps', async () => {
     mockVSCode.env.appName = 'Some Unknown Editor'
 
-    const { detectAppType, AppType } = await import(
-      '../src/shared/repositoryInfo'
-    )
+    const { detectAppType, AppType } =
+      await import('../src/shared/repositoryInfo')
 
     expect(detectAppType()).toBe(AppType.UNKNOWN)
   })
@@ -86,9 +81,8 @@ describe('detectAppType', () => {
   it('handles empty app name', async () => {
     mockVSCode.env.appName = ''
 
-    const { detectAppType, AppType } = await import(
-      '../src/shared/repositoryInfo'
-    )
+    const { detectAppType, AppType } =
+      await import('../src/shared/repositoryInfo')
 
     expect(detectAppType()).toBe(AppType.UNKNOWN)
   })

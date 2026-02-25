@@ -48,9 +48,8 @@ describe('GitBlameCache', () => {
   })
 
   it('does not hang when git cannot be spawned (error event)', async () => {
-    const { createGitWithLogging } = await import(
-      '../src/mobbdev_src/utils/gitUtils'
-    )
+    const { createGitWithLogging } =
+      await import('../src/mobbdev_src/utils/gitUtils')
     const { logger } = await import('../src/shared/logger')
 
     // Mock git.raw() to throw an error (simulating git command failure)
@@ -83,9 +82,8 @@ describe('GitBlameCache', () => {
 
   describe('document version tracking', () => {
     it('uses cached result when document version matches', async () => {
-      const { createGitWithLogging } = await import(
-        '../src/mobbdev_src/utils/gitUtils'
-      )
+      const { createGitWithLogging } =
+        await import('../src/mobbdev_src/utils/gitUtils')
       const { GitBlameCache } = await import('../src/ui/GitBlameCache')
 
       // Mock successful git blame output
@@ -125,9 +123,8 @@ describe('GitBlameCache', () => {
     })
 
     it('fetches new data when document version changes', async () => {
-      const { createGitWithLogging } = await import(
-        '../src/mobbdev_src/utils/gitUtils'
-      )
+      const { createGitWithLogging } =
+        await import('../src/mobbdev_src/utils/gitUtils')
       const { GitBlameCache } = await import('../src/ui/GitBlameCache')
 
       // Mock first git result
@@ -180,9 +177,8 @@ describe('GitBlameCache', () => {
   describe('dirty file handling', () => {
     it('creates temp file for dirty documents', async () => {
       const fs = await import('fs')
-      const { createGitWithLogging } = await import(
-        '../src/mobbdev_src/utils/gitUtils'
-      )
+      const { createGitWithLogging } =
+        await import('../src/mobbdev_src/utils/gitUtils')
       const { GitBlameCache } = await import('../src/ui/GitBlameCache')
 
       const mockGit = {
@@ -221,9 +217,8 @@ describe('GitBlameCache', () => {
 
     it('cleans up temp files after git blame completes', async () => {
       const fs = await import('fs')
-      const { createGitWithLogging } = await import(
-        '../src/mobbdev_src/utils/gitUtils'
-      )
+      const { createGitWithLogging } =
+        await import('../src/mobbdev_src/utils/gitUtils')
       const { GitBlameCache } = await import('../src/ui/GitBlameCache')
 
       const mockGit = {
@@ -255,9 +250,8 @@ describe('GitBlameCache', () => {
 
     it('cleans up temp files even when git blame fails', async () => {
       const fs = await import('fs')
-      const { createGitWithLogging } = await import(
-        '../src/mobbdev_src/utils/gitUtils'
-      )
+      const { createGitWithLogging } =
+        await import('../src/mobbdev_src/utils/gitUtils')
       const { GitBlameCache } = await import('../src/ui/GitBlameCache')
 
       const mockGit = {
