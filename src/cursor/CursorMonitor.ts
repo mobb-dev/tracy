@@ -2,15 +2,24 @@ import { setTimeout } from 'node:timers/promises'
 
 import * as vscode from 'vscode'
 
+import { logHeartbeat, logInfo } from '../shared/circularLog'
 import { BaseMonitor } from '../shared/IMonitor'
 import { logger } from '../shared/logger'
 import { AppType } from '../shared/repositoryInfo'
 import { startupTimestamp } from '../shared/startupTimestamp'
 import { uploadCursorChanges } from '../shared/uploader'
-import { getCompletedFileEditBubbles } from './db'
-import { markExistingToolCallsAsUploaded, processBubbles } from './processor'
+import { getCompletedFileEditBubblesSince } from './db'
+import { processBubbles } from './processor'
 
-const POLLING_INTERVAL = 5000
+const DEFAULT_POLLING_INTERVAL = 20_000
+const BASE_POLLING_INTERVAL = process.env.MOBB_TRACER_POLL_INTERVAL_MS
+  ? Number(process.env.MOBB_TRACER_POLL_INTERVAL_MS)
+  : DEFAULT_POLLING_INTERVAL
+const MAX_POLLING_INTERVAL = BASE_POLLING_INTERVAL * 6
+const BATCH_SIZE = 50
+const QUERY_LIMIT = 200
+const CIRCUIT_BREAKER_THRESHOLD = 5
+const CIRCUIT_BREAKER_COOLDOWN = 120_000
 
 export class CursorMonitor extends BaseMonitor {
   readonly name = 'CursorMonitor'
@@ -19,6 +28,9 @@ export class CursorMonitor extends BaseMonitor {
   private oldRowsLen = -1
   private pollingPromise: Promise<void> | null = null
   private abortController: AbortController | null = null
+  private lastPollTimestamp: string | null = null
+  private consecutiveFailures = 0
+  private currentInterval = BASE_POLLING_INTERVAL
 
   constructor(
     private context: vscode.ExtensionContext,
@@ -36,38 +48,17 @@ export class CursorMonitor extends BaseMonitor {
 
     logger.debug(`Starting ${this.name}`)
 
-    try {
-      // Fetch only completed file edits (bubbles with codeblockId)
-      // This is much more efficient than fetching all bubbles
-      const rows = await getCompletedFileEditBubbles()
-      markExistingToolCallsAsUploaded(rows)
+    // No startup scan needed — the incremental query only fetches rows
+    // created after startupTimestamp, and processBubbles also filters by
+    // createdAt < startupTimestamp as a safety net. Old bubbles are never
+    // re-uploaded regardless.
+    this.lastPollTimestamp = this.startupTimestamp.toISOString()
 
-      this._isRunning = true
-      this.abortController = new AbortController()
-      this.pollingPromise = this.poll()
+    this._isRunning = true
+    this.abortController = new AbortController()
+    this.pollingPromise = this.poll()
 
-      logger.debug(`${this.name} started successfully`)
-    } catch (err) {
-      // Checkpoint failures during startup are recoverable - start polling anyway
-      // The poll loop will retry and eventually succeed
-      const errMsg = err instanceof Error ? err.message : String(err)
-      if (
-        errMsg.includes('SQLITE_BUSY') ||
-        errMsg.includes('database is locked')
-      ) {
-        logger.warn(
-          { err },
-          `${this.name} initial DB query failed, starting polling anyway`
-        )
-        this._isRunning = true
-        this.abortController = new AbortController()
-        this.pollingPromise = this.poll()
-      } else {
-        logger.error({ err }, `Failed to start ${this.name}`)
-        this._isRunning = false
-        throw err
-      }
-    }
+    logger.debug(`${this.name} started successfully`)
   }
 
   async stop(): Promise<void> {
@@ -101,7 +92,11 @@ export class CursorMonitor extends BaseMonitor {
   private async poll(): Promise<void> {
     while (this._isRunning && !this.abortController?.signal.aborted) {
       try {
-        await setTimeout(POLLING_INTERVAL, undefined, {
+        // Apply jitter: ±20% of current interval
+        const jitter = this.currentInterval * 0.2 * (Math.random() * 2 - 1)
+        const delay = Math.round(this.currentInterval + jitter)
+
+        await setTimeout(delay, undefined, {
           signal: this.abortController?.signal,
         })
 
@@ -109,26 +104,74 @@ export class CursorMonitor extends BaseMonitor {
           break
         }
 
-        // Fetch only completed file edits (optimized query)
-        const rows = await getCompletedFileEditBubbles()
+        // Circuit breaker: if too many consecutive failures, enter cooldown
+        if (this.consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+          logger.warn(
+            `${this.name} circuit breaker open (${this.consecutiveFailures} failures), cooling down ${CIRCUIT_BREAKER_COOLDOWN / 1000}s`
+          )
+          logHeartbeat('circuit breaker open', {
+            failures: this.consecutiveFailures,
+          })
+          await setTimeout(CIRCUIT_BREAKER_COOLDOWN, undefined, {
+            signal: this.abortController?.signal,
+          })
+          // Half-open: try one probe cycle
+          this.consecutiveFailures = CIRCUIT_BREAKER_THRESHOLD - 1
+        }
 
-        const changes = await processBubbles(rows, this.startupTimestamp)
+        // Use incremental query with time filter + limit
+        const sinceIso =
+          this.lastPollTimestamp || this.startupTimestamp.toISOString()
+        const rows = await getCompletedFileEditBubblesSince(
+          sinceIso,
+          QUERY_LIMIT
+        )
 
-        // Log only if something changed
+        const { changes, latestTimestamp, hasMore } = await processBubbles(
+          rows,
+          this.startupTimestamp,
+          BATCH_SIZE
+        )
+
+        // Update high-water mark
+        if (latestTimestamp) {
+          this.lastPollTimestamp = latestTimestamp
+        }
+
+        // Success: reset backoff
+        this.consecutiveFailures = 0
+        this.currentInterval = BASE_POLLING_INTERVAL
+
+        // Log to Datadog only when row count changes or changes found
         if (this.oldRowsLen !== rows.length || changes.length > 0) {
           this.oldRowsLen = rows.length
           logger.info(`Found ${rows.length} rows, ${changes.length} changes`)
         }
 
+        // Heartbeat: separate ring buffer so idle polls don't push out operational logs
+        logHeartbeat(`poll: ${rows.length} rows, ${changes.length} changes`, {
+          hasMore,
+        })
+
         if (changes.length > 0) {
+          logInfo(
+            `Processed ${changes.length} change(s)${hasMore ? ' (more pending)' : ''}`,
+            { rows: rows.length }
+          )
           await uploadCursorChanges(changes)
         }
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {
           break
         }
-        // Checkpoint failures (e.g., SQLITE_BUSY) are expected when Cursor holds the lock
-        // Log as warning and skip this cycle - will retry on next poll
+
+        // Increment failure count and apply exponential backoff
+        this.consecutiveFailures++
+        this.currentInterval = Math.min(
+          BASE_POLLING_INTERVAL * Math.pow(2, this.consecutiveFailures - 1),
+          MAX_POLLING_INTERVAL
+        )
+
         const errMsg = err instanceof Error ? err.message : String(err)
         if (
           errMsg.includes('SQLITE_BUSY') ||
@@ -138,7 +181,13 @@ export class CursorMonitor extends BaseMonitor {
         } else {
           logger.error({ err }, `Error in ${this.name} polling`)
         }
-        // Continue polling even after errors
+
+        logHeartbeat(
+          `poll error (${this.consecutiveFailures}x), next in ${Math.round(this.currentInterval / 1000)}s`,
+          {
+            error: errMsg.slice(0, 100),
+          }
+        )
       }
     }
   }

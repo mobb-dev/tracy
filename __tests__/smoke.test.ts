@@ -101,7 +101,7 @@ vi.mock('../src/cursor/db', () => ({
   initDB: vi.fn().mockResolvedValue(undefined),
   closeDB: vi.fn().mockResolvedValue(undefined),
   getRowsByLike: vi.fn().mockResolvedValue([]),
-  getCompletedFileEditBubbles: vi.fn().mockResolvedValue([]),
+  getCompletedFileEditBubblesSince: vi.fn().mockResolvedValue([]),
 }))
 
 describe('copilot extension module', () => {

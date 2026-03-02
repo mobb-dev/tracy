@@ -19,6 +19,7 @@ vi.mock('../src/mobbdev_src/commands/handleMobbLogin', () => ({
 
 vi.mock('../src/shared/gqlClientFactory', () => ({
   createGQLClient: vi.fn(),
+  invalidateOnAuthError: vi.fn(),
 }))
 
 vi.mock('../src/shared/logger', () => ({

@@ -2,121 +2,220 @@
  * Database module for interacting with Cursor's SQLite database (state.vscdb).
  * This module provides read-only access to Cursor's internal key-value store.
  *
- * Uses Node.js 22+ built-in sqlite module (node:sqlite) for:
- * - Direct file queries (no memory copy like sql.js)
- * - Automatic WAL read support (no checkpoint needed)
- * - Persistent connection with reconnection on error
+ * All queries run on a Worker thread to avoid blocking the extension host.
+ * Previously used synchronous DatabaseSync on the main thread, which froze
+ * Cursor for 1+ seconds on large databases.
  */
 
-import * as fs from 'node:fs'
+import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
+import { Worker } from 'node:worker_threads'
 
 import * as vscode from 'vscode'
 
+import { logError } from '../shared/circularLog'
 import { logger } from '../shared/logger'
 
-/** Cached database path */
-let dbPath: string | null = null
+const WORKER_REQUEST_TIMEOUT_MS = 10_000
 
-/** Persistent database connection */
-let db: DatabaseSync | null = null
+/** Worker instance */
+let worker: Worker | null = null
+
+/** Stored dbPath for auto-restart after unexpected worker exit */
+let storedDbPath: string | null = null
+
+/** Whether closeDB() was called intentionally */
+let isClosing = false
+
+/** Crash-loop protection: track restarts within a rolling window */
+const MAX_RESTARTS = 3
+const RESTART_WINDOW_MS = 60_000
+const restartTimestamps: number[] = []
+
+/** Monotonic request ID counter */
+let nextRequestId = 0
+
+/** Pending request callbacks */
+const pendingRequests = new Map<
+  number,
+  { resolve: (value: unknown) => void; reject: (error: Error) => void }
+>()
 
 /**
- * Get database connection, creating if needed.
- * Opens with readOnly to allow concurrent access while Cursor has the DB open.
- *
- * @returns DatabaseSync connection
- * @throws Error if dbPath not initialized
+ * Spawn a new worker thread and wire up event handlers.
  */
-function getConnection(): DatabaseSync {
-  if (!dbPath) {
-    throw new Error('DB not initialized')
-  }
+function spawnWorker(dbPath: string): void {
+  const workerPath = path.join(__dirname, 'dbWorker.js')
+  worker = new Worker(workerPath, {
+    workerData: { dbPath },
+  })
 
-  if (!db) {
-    db = new DatabaseSync(dbPath, { readOnly: true })
-    logger.debug('[db.ts] Database connection established')
-  }
-  return db
+  worker.on(
+    'message',
+    (msg: { id: number; result?: unknown; error?: string }) => {
+      const pending = pendingRequests.get(msg.id)
+      if (!pending) {
+        return
+      }
+      pendingRequests.delete(msg.id)
+
+      if (msg.error) {
+        pending.reject(new Error(msg.error))
+      } else {
+        pending.resolve(msg.result)
+      }
+    }
+  )
+
+  worker.on('error', (err: Error) => {
+    logger.error({ err }, '[db.ts] Worker error')
+    logError('DB worker error', err.message)
+    // Reject all pending requests
+    for (const [id, pending] of pendingRequests) {
+      pending.reject(new Error(`Worker error: ${err.message}`))
+      pendingRequests.delete(id)
+    }
+  })
+
+  worker.on('exit', (code) => {
+    worker = null
+    // Reject all pending requests
+    for (const [id, pending] of pendingRequests) {
+      pending.reject(new Error(`Worker exited with code ${code}`))
+      pendingRequests.delete(id)
+    }
+
+    if (code !== 0 && !isClosing) {
+      logger.warn(
+        `[db.ts] Worker exited with code ${code}, will restart on next request`
+      )
+    }
+  })
 }
 
 /**
- * Close current connection (for reconnection on error).
+ * Ensure the worker is running, restarting it if it crashed.
+ * Protects against crash loops: max 3 restarts within 60s.
+ * Returns true if the worker is available.
  */
-function closeConnection(): void {
-  try {
-    db?.close()
-  } catch {
-    // Ignore close errors
+function ensureWorker(): boolean {
+  if (worker) {
+    return true
   }
-  db = null
+
+  if (!storedDbPath || isClosing) {
+    return false
+  }
+
+  // Crash-loop protection: prune old timestamps and check limit
+  const now = Date.now()
+  while (
+    restartTimestamps.length > 0 &&
+    now - restartTimestamps[0] > RESTART_WINDOW_MS
+  ) {
+    restartTimestamps.shift()
+  }
+  if (restartTimestamps.length >= MAX_RESTARTS) {
+    logger.error(
+      `[db.ts] Worker restart suppressed (${MAX_RESTARTS} restarts in ${RESTART_WINDOW_MS / 1000}s)`
+    )
+    return false
+  }
+
+  restartTimestamps.push(now)
+  logger.info('[db.ts] Restarting DB worker after unexpected exit')
+  logError('DB worker restart', 'auto-restarting after crash')
+  spawnWorker(storedDbPath)
+  return !!worker
 }
 
 /**
- * Execute a query with automatic reconnection on error.
- * If the first attempt fails (e.g., stale connection), closes and retries once.
- *
- * @param fn - Function that executes the query
- * @returns Query result
+ * Send a request to the worker and wait for the response.
  */
-function executeWithReconnect<T>(fn: (conn: DatabaseSync) => T): T {
-  try {
-    return fn(getConnection())
-  } catch (err) {
-    logger.warn({ err }, '[db.ts] Query failed, reconnecting...')
-    closeConnection()
-    // Retry once with fresh connection
-    return fn(getConnection())
+function workerRequest<T>(
+  method: string,
+  params: Record<string, unknown> = {},
+  timeoutMs: number = WORKER_REQUEST_TIMEOUT_MS
+): Promise<T> {
+  if (!ensureWorker()) {
+    return Promise.reject(new Error('DB worker not initialized'))
   }
+
+  const id = nextRequestId++
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pendingRequests.delete(id)
+      reject(new Error(`DB worker request timed out: ${method}`))
+    }, timeoutMs)
+
+    pendingRequests.set(id, {
+      resolve: (value) => {
+        clearTimeout(timeout)
+        resolve(value as T)
+      },
+      reject: (err) => {
+        clearTimeout(timeout)
+        reject(err)
+      },
+    })
+
+    worker!.postMessage({ id, method, params })
+  })
 }
 
 /**
- * Initialize the database module by storing the path and establishing connection.
+ * Initialize the database module by creating a Worker thread.
  *
  * @param context - VS Code extension context used to locate the database
  */
 export async function initDB(context: vscode.ExtensionContext): Promise<void> {
-  if (dbPath && db) {
+  if (worker) {
     return
   }
 
-  dbPath = getDatabasePath(context)
+  const dbPath = getDatabasePath(context)
 
   // Verify the database file exists
-  if (!fs.existsSync(dbPath)) {
+  try {
+    await fs.access(dbPath)
+  } catch {
     throw new Error(`Database file not found: ${dbPath}`)
   }
 
-  // Establish initial connection
-  getConnection()
+  isClosing = false
+  storedDbPath = dbPath
+  spawnWorker(dbPath)
 
   logger.debug(
-    `[db.ts] Database initialized: ${dbPath} (Node ${process.version})`
+    `[db.ts] Database worker initialized: ${dbPath} (Node ${process.version})`
   )
 }
 
 /**
- * Close the database module.
+ * Close the database module by terminating the Worker.
  */
 export async function closeDB(): Promise<void> {
-  closeConnection()
-  dbPath = null
+  isClosing = true
+  storedDbPath = null
+
+  if (!worker) {
+    return
+  }
+
+  try {
+    await workerRequest('close')
+  } catch {
+    // Ignore errors during close
+  }
+
+  await worker.terminate()
+  worker = null
+  pendingRequests.clear()
   logger.debug('[db.ts] Database module closed')
 }
 
 /**
  * Resolves the absolute path to Cursor's SQLite database file (state.vscdb).
- *
- * The database is located in Cursor's global storage directory, one level up
- * from the extension's own global storage path.
- *
- * Path transformation:
- * - From: /path/to/Cursor/User/globalStorage/publisher.extension-name
- * - To:   /path/to/Cursor/User/globalStorage/state.vscdb
- *
- * @param context - VS Code extension context containing the global storage URI
- * @returns Absolute path to state.vscdb
  */
 function getDatabasePath(context: vscode.ExtensionContext): string {
   const globalStoragePath = context.globalStorageUri.fsPath
@@ -126,32 +225,14 @@ function getDatabasePath(context: vscode.ExtensionContext): string {
 
 /**
  * Represents a row from the cursorDiskKV table in Cursor's database.
- * The database uses a simple key-value structure for storing state.
  */
 export type DBRow = {
-  /** The key identifier for the stored value */
   key: string
-  /** The stored value (optional when keyOnly is true) */
   value?: string
 }
 
 /**
  * Query the SQLite database with LIKE pattern matching.
- *
- * @param params - Query parameters
- * @param params.key - Key pattern to match (supports SQL LIKE wildcards: % and _)
- * @param params.value - Optional value pattern to match (supports SQL LIKE wildcards)
- * @param params.keyOnly - If true, only return keys without values for better performance
- * @returns Array of matching database rows
- * @throws Error if key is empty, DB is not initialized, or query execution fails
- *
- * @example
- * // Find all keys starting with "user."
- * const rows = await getRowsByLike({ key: 'user.%' })
- *
- * @example
- * // Find keys matching pattern with specific value
- * const rows = await getRowsByLike({ key: 'settings.%', value: '%dark%' })
  */
 export async function getRowsByLike({
   key,
@@ -166,79 +247,40 @@ export async function getRowsByLike({
     throw new Error('key cannot be null')
   }
 
-  return executeWithReconnect((conn) => {
-    const columns = keyOnly ? 'key' : 'key, value'
-    let sql = `SELECT ${columns} FROM cursorDiskKV WHERE key LIKE ?`
-    const params: string[] = [key]
-
-    if (value) {
-      sql += ' AND value LIKE ?'
-      params.push(value)
-    }
-
-    const stmt = conn.prepare(sql)
-    return stmt.all(...params) as DBRow[]
-  })
+  return workerRequest<DBRow[]>('getRowsByLike', { key, value, keyOnly })
 }
 
 /**
- * File edit tool names in Cursor that we want to track.
- * These are the tools that modify files and have codeblockId when completed.
+ * Query for bubble rows created after a given timestamp.
+ * Used for incremental polling — only fetches new rows.
  */
-const FILE_EDIT_TOOLS = [
-  'search_replace',
-  'apply_patch',
-  'write',
-  'edit_file',
-  'edit_file_v2',
-  'MultiEdit',
-]
-
-/**
- * Query for bubble rows that are file edit tool calls.
- *
- * This is an optimized query that filters at the SQL level using JSON extraction,
- * significantly reducing the number of rows that need to be parsed in JavaScript.
- *
- * Filters by tool name (more reliable than codeblockId which is set async):
- * - search_replace, apply_patch, write, edit_file, MultiEdit
- *
- * Note: codeblockId is checked in processor.ts after fetching, as it may be set
- * slightly after status becomes 'completed'.
- *
- * @returns Array of bubble rows for file edit tools
- */
-export async function getCompletedFileEditBubbles(): Promise<DBRow[]> {
-  return executeWithReconnect((conn) => {
-    const placeholders = FILE_EDIT_TOOLS.map(() => '?').join(', ')
-
-    const sql = `
-      SELECT key, value FROM cursorDiskKV
-      WHERE key LIKE 'bubbleId:%'
-      AND json_extract(value, '$.toolFormerData.name') IN (${placeholders})
-    `
-      .replace(/\n/g, ' ')
-      .trim()
-
-    const stmt = conn.prepare(sql)
-    return stmt.all(...FILE_EDIT_TOOLS) as DBRow[]
+export async function getCompletedFileEditBubblesSince(
+  sinceIso: string,
+  limit: number
+): Promise<DBRow[]> {
+  return workerRequest<DBRow[]>('getCompletedFileEditBubblesSince', {
+    sinceIso,
+    limit,
   })
 }
 
 /**
  * Get content stored at a composer.content.* key.
- * Used for edit_file_v2 which stores before/after content separately.
- *
- * @param contentId - The content ID (e.g., "composer.content.abc123...")
- * @returns The content string, or undefined if not found
  */
 export async function getComposerContent(
   contentId: string
 ): Promise<string | undefined> {
-  return executeWithReconnect((conn) => {
-    const sql = 'SELECT value FROM cursorDiskKV WHERE key = ?'
-    const stmt = conn.prepare(sql)
-    const row = stmt.get(contentId) as { value?: string } | undefined
-    return row?.value
-  })
+  return workerRequest<string | undefined>('getComposerContent', { contentId })
+}
+
+/**
+ * Batch fetch bubble rows by exact keys.
+ * Replaces N individual getRowsByLike calls in extractConversation.
+ */
+export async function getBubblesByKeys(keys: string[]): Promise<DBRow[]> {
+  if (keys.length === 0) {
+    return []
+  }
+
+  return workerRequest<DBRow[]>('getBubblesByKeys', { keys })
 }

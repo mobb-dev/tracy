@@ -1,11 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as db from '../src/cursor/db'
-import {
-  markExistingToolCallsAsUploaded,
-  processBubbles,
-  resetProcessedBubbles,
-} from '../src/cursor/processor'
+import { processBubbles, resetProcessedBubbles } from '../src/cursor/processor'
 
 vi.mock('vscode', () => {
   return {}
@@ -14,8 +10,8 @@ vi.mock('vscode', () => {
 vi.mock('../src/cursor/db', () => {
   return {
     getRowsByLike: vi.fn(),
-    getCompletedFileEditBubbles: vi.fn(),
     getComposerContent: vi.fn(),
+    getBubblesByKeys: vi.fn().mockResolvedValue([]),
   }
 })
 
@@ -31,11 +27,14 @@ vi.mock('../src/shared/logger', () => {
 
 const getRowsByLike = vi.mocked(db.getRowsByLike)
 const getComposerContent = vi.mocked(db.getComposerContent)
+const getBubblesByKeys = vi.mocked(db.getBubblesByKeys)
 
 beforeEach(() => {
   resetProcessedBubbles()
   getRowsByLike.mockReset()
   getComposerContent.mockReset()
+  getBubblesByKeys.mockReset()
+  getBubblesByKeys.mockResolvedValue([])
 })
 
 // Helper to create a bubble row with value
@@ -134,7 +133,10 @@ describe('processor tests', () => {
 
       getRowsByLike.mockResolvedValueOnce([createComposerRow('composerData:1')])
 
-      const changes = await processBubbles([bubbleRow], new Date('2024-01-01'))
+      const { changes } = await processBubbles(
+        [bubbleRow],
+        new Date('2024-01-01')
+      )
 
       expect(changes).toHaveLength(1)
       expect(changes[0].model).toBe('Test model')
@@ -148,7 +150,10 @@ describe('processor tests', () => {
         '3001-01-01T12:00:00.000Z'
       )
 
-      const changes = await processBubbles([bubbleRow], new Date('2024-01-01'))
+      const { changes } = await processBubbles(
+        [bubbleRow],
+        new Date('2024-01-01')
+      )
 
       expect(changes).toHaveLength(0)
       expect(getRowsByLike).not.toHaveBeenCalled()
@@ -164,11 +169,17 @@ describe('processor tests', () => {
       getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
 
       // First call - should process
-      const changes1 = await processBubbles([bubbleRow], new Date('2024-01-01'))
+      const { changes: changes1 } = await processBubbles(
+        [bubbleRow],
+        new Date('2024-01-01')
+      )
       expect(changes1).toHaveLength(1)
 
       // Second call with same codeblockId - should skip
-      const changes2 = await processBubbles([bubbleRow], new Date('2024-01-01'))
+      const { changes: changes2 } = await processBubbles(
+        [bubbleRow],
+        new Date('2024-01-01')
+      )
       expect(changes2).toHaveLength(0)
     })
 
@@ -186,80 +197,12 @@ describe('processor tests', () => {
 
       getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
 
-      const changes = await processBubbles(
+      const { changes } = await processBubbles(
         [bubble1, bubble2],
         new Date('2024-01-01')
       )
 
       expect(changes).toHaveLength(2)
-    })
-  })
-
-  describe('markExistingToolCallsAsUploaded', () => {
-    it('marks codeblockIds from completed bubbles as seen', async () => {
-      const bubbleRow = createBubbleRow(
-        'bubbleId:xxx:yyy',
-        'codeblock-123',
-        '2024-01-01T12:00:00.000Z',
-        'completed'
-      )
-
-      markExistingToolCallsAsUploaded([bubbleRow])
-
-      // Now processBubbles should skip this codeblockId
-      const changes = await processBubbles([bubbleRow], new Date('2024-01-01'))
-      expect(changes).toHaveLength(0)
-    })
-
-    it('does not mark incomplete bubbles as seen', async () => {
-      const incompleteBubble = createBubbleRow(
-        'bubbleId:xxx:yyy',
-        'codeblock-123',
-        '3001-01-01T12:00:00.000Z',
-        'running' // not completed
-      )
-
-      markExistingToolCallsAsUploaded([incompleteBubble])
-
-      // Create a completed version of the same bubble
-      const completedBubble = createBubbleRow(
-        'bubbleId:xxx:yyy',
-        'codeblock-123',
-        '3001-01-01T12:00:00.000Z',
-        'completed'
-      )
-
-      getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
-
-      // Should still process because it wasn't marked as seen (was incomplete)
-      const changes = await processBubbles(
-        [completedBubble],
-        new Date('2024-01-01')
-      )
-      expect(changes).toHaveLength(1)
-    })
-
-    it('ignores bubbles without codeblockId', async () => {
-      const bubbleWithoutCodeblock = createBubbleRow(
-        'bubbleId:xxx:yyy',
-        null,
-        '2024-01-01T12:00:00.000Z'
-      )
-
-      // Should not throw
-      markExistingToolCallsAsUploaded([bubbleWithoutCodeblock])
-
-      // A new bubble with codeblockId should still be processed
-      const newBubble = createBubbleRow(
-        'bubbleId:aaa:bbb',
-        'codeblock-new',
-        '3001-01-01T12:00:00.000Z'
-      )
-
-      getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
-
-      const changes = await processBubbles([newBubble], new Date('2024-01-01'))
-      expect(changes).toHaveLength(1)
     })
   })
 
@@ -274,12 +217,18 @@ describe('processor tests', () => {
       const startupTimestamp = new Date('2024-06-01T00:00:00.000Z')
 
       // First call - should skip but mark as seen
-      const changes1 = await processBubbles([oldBubble], startupTimestamp)
+      const { changes: changes1 } = await processBubbles(
+        [oldBubble],
+        startupTimestamp
+      )
       expect(changes1).toHaveLength(0)
 
       // Second call - should still skip (already marked as seen)
       // This verifies the optimization: we don't re-check old bubbles
-      const changes2 = await processBubbles([oldBubble], startupTimestamp)
+      const { changes: changes2 } = await processBubbles(
+        [oldBubble],
+        startupTimestamp
+      )
       expect(changes2).toHaveLength(0)
 
       // getRowsByLike should never have been called (we skip before querying)
@@ -297,8 +246,81 @@ describe('processor tests', () => {
 
       getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
 
-      const changes = await processBubbles([newBubble], startupTimestamp)
+      const { changes } = await processBubbles([newBubble], startupTimestamp)
       expect(changes).toHaveLength(1)
+    })
+  })
+
+  describe('incremental polling behavior', () => {
+    it('returns hasMore: true when batchLimit is exceeded', async () => {
+      const bubble1 = createBubbleRow(
+        'bubbleId:aaa:111',
+        'codeblock-1',
+        '3001-01-01T12:00:00.000Z'
+      )
+      const bubble2 = createBubbleRow(
+        'bubbleId:bbb:222',
+        'codeblock-2',
+        '3001-01-01T12:01:00.000Z'
+      )
+
+      getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
+
+      const { changes, hasMore } = await processBubbles(
+        [bubble1, bubble2],
+        new Date('2024-01-01'),
+        1 // batchLimit of 1
+      )
+
+      expect(changes).toHaveLength(1)
+      expect(hasMore).toBe(true)
+    })
+
+    it('latestTimestamp advances for completed rows even without toolCallId', async () => {
+      // A completed bubble with no toolCallId is malformed but still advances watermark
+      const skippedBubble = createBubbleRow(
+        'bubbleId:xxx:yyy',
+        null, // no codeblockId → toolCallId will be undefined
+        '3001-01-01T15:00:00.000Z',
+        'completed'
+      )
+
+      const { latestTimestamp } = await processBubbles(
+        [skippedBubble],
+        new Date('2024-01-01')
+      )
+
+      // Completed row advances the watermark even though no change was produced
+      expect(latestTimestamp).toBe('3001-01-01T15:00:00.000Z')
+    })
+
+    it('latestTimestamp does NOT advance for non-completed rows', async () => {
+      // A "running" bubble must NOT advance the watermark — we need to
+      // re-fetch it on the next poll once it becomes "completed"
+      const runningBubble = createBubbleRow(
+        'bubbleId:xxx:yyy',
+        'codeblock-1',
+        '3001-01-01T15:00:00.000Z',
+        'running'
+      )
+
+      const { latestTimestamp } = await processBubbles(
+        [runningBubble],
+        new Date('2024-01-01')
+      )
+
+      expect(latestTimestamp).toBeNull()
+    })
+
+    it('latestTimestamp is null when rows have no parseable value', async () => {
+      const emptyRow = { key: 'bubbleId:xxx:yyy' } // no value field
+
+      const { latestTimestamp } = await processBubbles(
+        [emptyRow],
+        new Date('2024-01-01')
+      )
+
+      expect(latestTimestamp).toBeNull()
     })
   })
 
@@ -313,7 +335,7 @@ describe('processor tests', () => {
 
       getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
 
-      const changes = await processBubbles(
+      const { changes } = await processBubbles(
         [runningBubble],
         new Date('2024-01-01')
       )
@@ -345,53 +367,50 @@ describe('processor tests', () => {
         }),
       }
 
-      getRowsByLike
-        // Composer data with conversation bubbles
-        .mockResolvedValueOnce([
-          {
-            key: 'composerData:1',
-            value: JSON.stringify({
-              fullConversationHeadersOnly: [
-                { bubbleId: 'bubble-before' },
-                { bubbleId: 'bubble-at' },
-                { bubbleId: 'bubble-after' },
-              ],
-              modelConfig: { modelName: 'Test model', maxModel: false },
-            }),
-          },
-        ])
-        // Conversation bubble before timestamp
-        .mockResolvedValueOnce([
-          {
-            key: 'bubble-before',
-            value: JSON.stringify({
-              createdAt: '2024-01-15T09:30:00Z',
-              text: 'Before timestamp',
-            }),
-          },
-        ])
-        // Conversation bubble at timestamp
-        .mockResolvedValueOnce([
-          {
-            key: 'bubble-at',
-            value: JSON.stringify({
-              createdAt: bubbleTimestamp.toISOString(),
-              text: 'At timestamp',
-            }),
-          },
-        ])
-        // Conversation bubble after timestamp (should be filtered)
-        .mockResolvedValueOnce([
-          {
-            key: 'bubble-after',
-            value: JSON.stringify({
-              createdAt: '2024-01-15T10:30:00Z',
-              text: 'After timestamp',
-            }),
-          },
-        ])
+      // Composer data lookup (via getRowsByLike)
+      getRowsByLike.mockResolvedValueOnce([
+        {
+          key: 'composerData:main',
+          value: JSON.stringify({
+            fullConversationHeadersOnly: [
+              { bubbleId: 'bubble-before' },
+              { bubbleId: 'bubble-at' },
+              { bubbleId: 'bubble-after' },
+            ],
+            modelConfig: { modelName: 'Test model', maxModel: false },
+          }),
+        },
+      ])
 
-      const changes = await processBubbles([mainBubble], new Date('2024-01-01'))
+      // Conversation bubbles batch fetch (via getBubblesByKeys)
+      getBubblesByKeys.mockResolvedValueOnce([
+        {
+          key: 'bubbleId:main:bubble-before',
+          value: JSON.stringify({
+            createdAt: '2024-01-15T09:30:00Z',
+            text: 'Before timestamp',
+          }),
+        },
+        {
+          key: 'bubbleId:main:bubble-at',
+          value: JSON.stringify({
+            createdAt: bubbleTimestamp.toISOString(),
+            text: 'At timestamp',
+          }),
+        },
+        {
+          key: 'bubbleId:main:bubble-after',
+          value: JSON.stringify({
+            createdAt: '2024-01-15T10:30:00Z',
+            text: 'After timestamp',
+          }),
+        },
+      ])
+
+      const { changes } = await processBubbles(
+        [mainBubble],
+        new Date('2024-01-01')
+      )
 
       expect(changes).toHaveLength(1)
       expect(changes[0].conversation).toHaveLength(2)
@@ -429,7 +448,7 @@ describe('processor tests', () => {
 
       getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
 
-      const changes = await processBubbles([bubble], new Date('2024-01-01'))
+      const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
       expect(changes).toHaveLength(1)
       expect(changes[0].additions).toBe('addition1\naddition2\naddition3')
@@ -461,7 +480,7 @@ describe('processor tests', () => {
 
       getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
 
-      const changes = await processBubbles([bubble], new Date('2024-01-01'))
+      const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
       expect(changes).toHaveLength(1)
       expect(changes[0].additions).toBe('chunk1line1\nchunk1line2\nchunk2line1')
@@ -472,7 +491,7 @@ describe('processor tests', () => {
     it('handles bubbles with no value', async () => {
       const bubbleWithoutValue = { key: 'bubbleId:xxx:yyy' }
 
-      const changes = await processBubbles(
+      const { changes } = await processBubbles(
         [bubbleWithoutValue],
         new Date('2024-01-01')
       )
@@ -485,7 +504,7 @@ describe('processor tests', () => {
         value: 'not valid json',
       }
 
-      const changes = await processBubbles(
+      const { changes } = await processBubbles(
         [malformedBubble],
         new Date('2024-01-01')
       )
@@ -501,7 +520,7 @@ describe('processor tests', () => {
 
       getRowsByLike.mockResolvedValue([]) // No composer data
 
-      const changes = await processBubbles([bubble], new Date('2024-01-01'))
+      const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
       expect(changes).toHaveLength(0)
     })
 
@@ -522,7 +541,7 @@ describe('processor tests', () => {
         },
       ])
 
-      const changes = await processBubbles([bubble], new Date('2024-01-01'))
+      const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
       expect(changes).toHaveLength(0)
     })
   })
@@ -544,7 +563,7 @@ describe('processor tests', () => {
       // Mock composer lookup
       getRowsByLike.mockResolvedValueOnce([createComposerRow('composerData:1')])
 
-      const changes = await processBubbles([bubble], new Date('2024-01-01'))
+      const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
       expect(changes).toHaveLength(1)
       expect(changes[0].additions).toBe('line3 added')
@@ -574,7 +593,7 @@ describe('processor tests', () => {
 
       getRowsByLike.mockResolvedValueOnce([createComposerRow('composerData:1')])
 
-      const changes = await processBubbles([bubble], new Date('2024-01-01'))
+      const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
       expect(changes).toHaveLength(1)
       expect(changes[0].additions).toBe('new line 1\nnew line 2\nnew line 3')
@@ -595,7 +614,7 @@ describe('processor tests', () => {
 
       getRowsByLike.mockResolvedValueOnce([createComposerRow('composerData:1')])
 
-      const changes = await processBubbles([bubble], new Date('2024-01-01'))
+      const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
       expect(changes).toHaveLength(1)
       // Should contain only additions (new content)
@@ -617,7 +636,7 @@ describe('processor tests', () => {
         .mockResolvedValueOnce(undefined)
         .mockResolvedValueOnce('after content')
 
-      const changes = await processBubbles([bubble], new Date('2024-01-01'))
+      const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
       expect(changes).toHaveLength(0)
     })
@@ -635,7 +654,7 @@ describe('processor tests', () => {
         .mockResolvedValueOnce('before content')
         .mockResolvedValueOnce(undefined)
 
-      const changes = await processBubbles([bubble], new Date('2024-01-01'))
+      const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
       expect(changes).toHaveLength(0)
     })
@@ -656,7 +675,7 @@ describe('processor tests', () => {
       // Mock composer lookup - not found
       getRowsByLike.mockResolvedValueOnce([])
 
-      const changes = await processBubbles([bubble], new Date('2024-01-01'))
+      const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
       expect(changes).toHaveLength(0)
     })
@@ -686,11 +705,17 @@ describe('processor tests', () => {
         .mockResolvedValueOnce('after new line')
 
       // First call - should process
-      const changes1 = await processBubbles([bubble], new Date('2024-01-01'))
+      const { changes: changes1 } = await processBubbles(
+        [bubble],
+        new Date('2024-01-01')
+      )
       expect(changes1).toHaveLength(1)
 
       // Second call with same toolCallId - should skip
-      const changes2 = await processBubbles([bubble], new Date('2024-01-01'))
+      const { changes: changes2 } = await processBubbles(
+        [bubble],
+        new Date('2024-01-01')
+      )
       expect(changes2).toHaveLength(0)
     })
 
@@ -709,7 +734,7 @@ describe('processor tests', () => {
 
       getRowsByLike.mockResolvedValueOnce([createComposerRow('composerData:1')])
 
-      const changes = await processBubbles([bubble], new Date('2024-01-01'))
+      const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
       expect(changes).toHaveLength(1)
       expect(changes[0].additions).toBe('line1\nline2\nline3')
@@ -732,7 +757,7 @@ describe('processor tests', () => {
 
       getRowsByLike.mockResolvedValueOnce([createComposerRow('composerData:1')])
 
-      const changes = await processBubbles([bubble], new Date('2024-01-01'))
+      const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
       expect(changes).toHaveLength(1)
       // Should contain the new/modified lines

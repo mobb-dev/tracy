@@ -99,14 +99,28 @@ export class GitBlameCache {
       .split(path.sep)
       .join(path.posix.sep)
 
+    // Skip files outside the repo (cross-repo files, symlinks)
+    // to avoid 8+ rapid git errors like "fatal: pathspec is beyond a symbolic link"
+    if (relPath.startsWith('..')) {
+      logger.debug(
+        `GitBlameCache: skipping file outside repo: ${absPath} (relPath: ${relPath})`
+      )
+      return { lines: {}, documentVersion: document.version || 0 }
+    }
+
     // If the document is dirty, write to a temp file for --contents flag
     let tempFilePath: string | undefined
     if (document.isDirty) {
       const tempDir = os.tmpdir()
-      tempFilePath = path.join(
-        tempDir,
-        `gitblamecache_${Date.now()}_${path.basename(document.fileName)}`
+      const safeInput = path.basename(
+        String(
+          `gitblamecache_${Date.now()}_${path.basename(document.fileName)}` ||
+            ''
+        )
+          .replace('\0', '')
+          .replace(/^(\.\.(\/|\\$))+/, '')
       )
+      tempFilePath = path.join(tempDir, safeInput)
       await fsPromises.writeFile(tempFilePath, document.getText(), 'utf8')
     }
     const cleanupTempFile = async (): Promise<void> => {

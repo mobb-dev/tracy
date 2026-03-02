@@ -1,5 +1,6 @@
-import * as fs from 'fs'
-import * as path from 'path'
+import * as fs from 'node:fs/promises'
+import * as path from 'node:path'
+
 import * as vscode from 'vscode'
 
 import { logger } from './logger'
@@ -34,7 +35,12 @@ export async function logJsonToFile(
     }
     let resolvePath = basePath
     if (dir) {
-      resolvePath = path.resolve(basePath, dir)
+      const safeInput = path.basename(
+        String(dir || '')
+          .replace('\0', '')
+          .replace(/^(\.\.(\/|\\$))+/, '')
+      )
+      resolvePath = path.resolve(basePath, safeInput)
       // Wait for directory creation to complete before proceeding
       await ensureDir(resolvePath)
     }
@@ -46,8 +52,18 @@ export async function logJsonToFile(
     const filename = safeHint
       ? `${ts}-${safeId}-${safeHint}.json`
       : `${ts}-${safeId}.json`
-    const filePath = path.resolve(resolvePath, filename)
-    fs.writeFileSync(filePath, JSON.stringify(obj, null, 2))
+    const safeResolvePath = path
+      .resolve(
+        path.sep,
+        path.normalize(
+          String(resolvePath || '')
+            .replace('\0', '')
+            .replace(/^(\.\.(\/|\\$))+/, '')
+        )
+      )
+      .slice(1)
+    const filePath = path.resolve(safeResolvePath, filename)
+    await fs.writeFile(filePath, JSON.stringify(obj, null, 2))
   } catch (err) {
     logger.error({ err }, 'Failed to write event')
   }

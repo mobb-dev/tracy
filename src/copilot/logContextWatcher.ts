@@ -1,4 +1,5 @@
 import * as fs from 'fs'
+import * as fsPromises from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
 import * as vscode from 'vscode'
@@ -103,7 +104,7 @@ export class LogContextWatcher {
 
     try {
       // Get initial file size
-      const stats = fs.statSync(this.logFilePath)
+      const stats = await fsPromises.stat(this.logFilePath)
       this.lastFileSize = stats.size
 
       // Create file watcher
@@ -159,7 +160,7 @@ export class LogContextWatcher {
     }
 
     try {
-      const stats = fs.statSync(this.logFilePath)
+      const stats = await fsPromises.stat(this.logFilePath)
       const currentSize = stats.size
 
       // Only process if file has grown (new content appended)

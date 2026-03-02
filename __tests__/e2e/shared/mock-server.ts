@@ -1,6 +1,9 @@
 import type { Server } from 'node:http'
 
+import Debug from 'debug'
 import express from 'express'
+
+const log = Debug('mobbdev:mock-server')
 
 export type InferenceUpload = {
   tool: string
@@ -29,10 +32,27 @@ export type InferenceUpload = {
   }>
 }
 
+export type TracyRecord = {
+  platform: string
+  recordId: string
+  recordTimestamp: string
+  clientVersion?: string
+  repositoryUrl?: string
+  computerName?: string
+  userName?: string
+  blameType?: string
+  rawData?: string
+  rawDataS3Key?: string
+  editType?: string
+  filePath?: string
+  additions?: string
+}
+
 export class MockUploadServer {
   private app = express()
   private server: Server | null = null
   private uploads: InferenceUpload[] = []
+  private tracyRecords: TracyRecord[] = []
   private port: number
   private requestLog: Array<{ method: string; path: string; body: unknown }> = []
   // Store S3 upload content separately, keyed by upload key
@@ -87,7 +107,7 @@ export class MockUploadServer {
   // ═══════════════════════════════════════════════════════════════════════════
 
   private handleAuthValidation(req: express.Request, res: express.Response) {
-    console.log(`  [Mock] Auth validation request (${req.method})`)
+    log(`  [Mock] Auth validation request (${req.method})`)
     res.json({ valid: true, user: 'test-user' })
   }
 
@@ -97,7 +117,7 @@ export class MockUploadServer {
       const variables = req.body.variables || {}
 
       // Log every GraphQL request with full details
-      console.log(`  [Mock] GraphQL request: ${operationName}`)
+      log(`  [Mock] GraphQL request: ${operationName}`)
 
       // For unknown operations, log full request body for debugging
       const knownOperations = [
@@ -108,11 +128,13 @@ export class MockUploadServer {
         'CreateCommunityUser',
         'UploadAIBlameInferencesInit', // Note: PascalCase!
         'FinalizeAIBlameInferencesUpload', // Note: PascalCase!
+        'UploadTracyRecords',
+        'GetTracyRawDataUploadUrls',
       ]
       if (!knownOperations.includes(operationName)) {
-        console.log(`  [Mock] ⚠️  UNKNOWN OPERATION: ${operationName}`)
-        console.log(`  [Mock]   Query: ${query.substring(0, 200)}...`)
-        console.log(
+        log(`  [Mock] ⚠️  UNKNOWN OPERATION: ${operationName}`)
+        log(`  [Mock]   Query: ${query.substring(0, 200)}...`)
+        log(
           `  [Mock]   Variables: ${JSON.stringify(variables).substring(0, 500)}`
         )
       }
@@ -123,8 +145,8 @@ export class MockUploadServer {
         query.toLowerCase().includes('inference') ||
         query.toLowerCase().includes('blame')
       ) {
-        console.log(`  [Mock] 📤 Detected upload-related query!`)
-        console.log(`  [Mock]   Full variables: ${JSON.stringify(variables)}`)
+        log(`  [Mock] 📤 Detected upload-related query!`)
+        log(`  [Mock]   Full variables: ${JSON.stringify(variables)}`)
       }
 
       // Handle different GraphQL operations
@@ -172,7 +194,7 @@ export class MockUploadServer {
         // Note: Actual prompts/inference content is uploaded separately via presigned URLs
         const sessions = req.body.variables?.sessions || []
         for (const session of sessions) {
-          console.log(
+          log(
             `  ✅ [Mock] Captured inference upload init: model=${session.model || 'unknown'}, tool=${session.toolName || 'unknown'}`
           )
           this.uploads.push({
@@ -231,9 +253,41 @@ export class MockUploadServer {
             },
           },
         })
+      } else if (operationName === 'UploadTracyRecords') {
+        const records = (variables.records || []) as TracyRecord[]
+        for (const record of records) {
+          this.tracyRecords.push(record)
+          log(
+            `  ✅ [Mock] Captured tracy record: platform=${record.platform}, id=${record.recordId}`
+          )
+        }
+        res.json({
+          data: {
+            uploadTracyRecords: {
+              status: 'OK',
+              error: null,
+            },
+          },
+        })
+      } else if (operationName === 'GetTracyRawDataUploadUrls') {
+        const recordIds = (variables.recordIds || []) as string[]
+        res.json({
+          data: {
+            getTracyRawDataUploadUrls: {
+              status: 'OK',
+              error: null,
+              uploads: recordIds.map((recordId: string) => ({
+                recordId,
+                url: `http://localhost:${this.port}/mock-s3-upload`,
+                uploadFieldsJSON: '{}',
+                uploadKey: `tracy-raw-data/test-user/${recordId}`,
+              })),
+            },
+          },
+        })
       } else {
         // Generic response for unknown operations - try to respond successfully
-        console.log(`  [Mock] Returning generic success for: ${operationName}`)
+        log(`  [Mock] Returning generic success for: ${operationName}`)
         res.json({
           data: {
             [operationName]: true,
@@ -283,11 +337,11 @@ export class MockUploadServer {
 
     if (uploadKey && fileContent) {
       this.s3Uploads.set(uploadKey, fileContent)
-      console.log(
+      log(
         `  ✅ [Mock] Captured S3 upload: key=${uploadKey}, content=${fileContent.substring(0, 100)}...`
       )
     } else {
-      console.log(
+      log(
         `  [Mock] Received S3-style file upload (key=${uploadKey || 'unknown'}, content length=${fileContent.length})`
       )
     }
@@ -298,7 +352,7 @@ export class MockUploadServer {
 
   private handleRestUpload(req: express.Request, res: express.Response) {
       const upload = req.body as InferenceUpload
-      console.log(
+      log(
         `  ✅ [Mock] Captured inference upload: model=${upload.model}, prompts=${upload.prompts?.length || 0}`
       )
       this.uploads.push(upload)
@@ -323,24 +377,24 @@ export class MockUploadServer {
 
   private async handleCopilotAuth(req: express.Request, res: express.Response) {
     const authUrl = req.body.url
-    console.log('🔐 [Mock] Copilot auth URL captured:', authUrl)
+    log('🔐 [Mock] Copilot auth URL captured:', authUrl)
 
     if (this.copilotAuthCallback) {
       try {
         await this.copilotAuthCallback(authUrl)
         res.json({ success: true })
       } catch (error) {
-        console.error('❌ [Mock] Copilot auth callback failed:', error)
+        log('❌ [Mock] Copilot auth callback failed:', error)
         res.status(500).json({ success: false, error: String(error) })
       }
     } else {
-      console.log('⚠️  [Mock] No Copilot auth callback registered')
+      log('⚠️  [Mock] No Copilot auth callback registered')
       res.json({ success: false, error: 'No callback registered' })
     }
   }
 
   private handleMcpTracking(req: express.Request, res: express.Response) {
-    console.log('  [Mock] MCP tracking request received')
+    log('  [Mock] MCP tracking request received')
     res.json({
       success: true,
       message: 'MCP tracking recorded',
@@ -349,8 +403,8 @@ export class MockUploadServer {
   }
 
   private handleUnknownRoute(req: express.Request, res: express.Response) {
-    console.log(`  [Mock] ⚠️  UNHANDLED REQUEST: ${req.method} ${req.path}`)
-    console.log(
+    log(`  [Mock] ⚠️  UNHANDLED REQUEST: ${req.method} ${req.path}`)
+    log(
       `  [Mock]   Body: ${JSON.stringify(req.body).substring(0, 500)}`
     )
     res.status(200).json({ success: true })
@@ -363,7 +417,7 @@ export class MockUploadServer {
   async start(): Promise<void> {
     return new Promise((resolve) => {
       this.server = this.app.listen(this.port, () => {
-        console.log(`🚀 Mock upload server listening on port ${this.port}`)
+        log(`🚀 Mock upload server listening on port ${this.port}`)
         resolve()
       })
     })
@@ -389,6 +443,10 @@ export class MockUploadServer {
     return this.uploads
   }
 
+  getCapturedTracyRecords(): TracyRecord[] {
+    return this.tracyRecords
+  }
+
   getS3Uploads(): Map<string, string> {
     return this.s3Uploads
   }
@@ -401,12 +459,17 @@ export class MockUploadServer {
     this.uploads = []
   }
 
+  clearTracyRecords(): void {
+    this.tracyRecords = []
+  }
+
   clearRequestLog(): void {
     this.requestLog = []
   }
 
   clearAll(): void {
     this.clearUploads()
+    this.clearTracyRecords()
     this.clearRequestLog()
     this.s3Uploads.clear()
   }
@@ -420,7 +483,7 @@ export class MockUploadServer {
     const logInterval = options.logInterval ?? 5000 // Log progress every 5 seconds
     let lastLogTime = 0
 
-    console.log(
+    log(
       `  ⏳ [Mock] Waiting for ${count} upload(s) (timeout: ${options.timeout / 1000}s)...`
     )
 
@@ -451,7 +514,7 @@ export class MockUploadServer {
 
       // Log progress periodically
       if (elapsed - lastLogTime >= logInterval) {
-        console.log(
+        log(
           `  📊 [Mock] Progress: ${this.uploads.length}/${count} uploads, ${Math.round(elapsed / 1000)}s elapsed, ${this.requestLog.length} total requests`
         )
         lastLogTime = elapsed
@@ -460,8 +523,55 @@ export class MockUploadServer {
       await new Promise((resolve) => setTimeout(resolve, checkInterval))
     }
 
-    console.log(
+    log(
       `  ✅ [Mock] Received ${this.uploads.length} uploads in ${Math.round((Date.now() - startTime) / 1000)}s`
+    )
+  }
+
+  async waitForTracyRecords(
+    count: number,
+    options: { timeout: number; logInterval?: number }
+  ): Promise<void> {
+    const startTime = Date.now()
+    const checkInterval = 1000
+    const logInterval = options.logInterval ?? 5000
+    let lastLogTime = 0
+
+    log(
+      `  ⏳ [Mock] Waiting for ${count} tracy record(s) (timeout: ${options.timeout / 1000}s)...`
+    )
+
+    while (this.tracyRecords.length < count) {
+      const elapsed = Date.now() - startTime
+
+      if (elapsed > options.timeout) {
+        const graphqlOps = this.requestLog
+          .filter((r) => r.path === '/graphql')
+          .map((r) => r.body?.operationName || 'unknown')
+        const opCounts: Record<string, number> = {}
+        for (const op of graphqlOps) {
+          opCounts[op] = (opCounts[op] || 0) + 1
+        }
+
+        throw new Error(
+          `Timeout waiting for ${count} tracy records. Got ${this.tracyRecords.length} after ${options.timeout}ms.\n` +
+            `Total requests: ${this.requestLog.length}\n` +
+            `GraphQL operations: ${JSON.stringify(opCounts, null, 2)}`
+        )
+      }
+
+      if (elapsed - lastLogTime >= logInterval) {
+        log(
+          `  📊 [Mock] Progress: ${this.tracyRecords.length}/${count} tracy records, ${Math.round(elapsed / 1000)}s elapsed`
+        )
+        lastLogTime = elapsed
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, checkInterval))
+    }
+
+    log(
+      `  ✅ [Mock] Received ${this.tracyRecords.length} tracy records in ${Math.round((Date.now() - startTime) / 1000)}s`
     )
   }
 
@@ -476,15 +586,15 @@ if (require.main === module) {
   const server = new MockUploadServer(port)
 
   server.start().then(() => {
-    console.log(`Mock server running on http://localhost:${port}`)
-    console.log(`Health check: http://localhost:${port}/health`)
-    console.log(`View uploads: http://localhost:${port}/debug/uploads`)
-    console.log(`View requests: http://localhost:${port}/debug/requests`)
+    log(`Mock server running on http://localhost:${port}`)
+    log(`Health check: http://localhost:${port}/health`)
+    log(`View uploads: http://localhost:${port}/debug/uploads`)
+    log(`View requests: http://localhost:${port}/debug/requests`)
   })
 
   // Handle graceful shutdown
   process.on('SIGINT', async () => {
-    console.log('\nShutting down mock server...')
+    log('\nShutting down mock server...')
     await server.stop()
     process.exit(0)
   })

@@ -155,7 +155,14 @@ export async function getRepositoryInfo(): Promise<RepositoryInfo | null> {
     // Get organization ID from user info
     const gqlClient = await createGQLClient()
     const userInfo = await gqlClient.getUserInfo()
-    logger.info(`user info: ${JSON.stringify(userInfo)}`)
+    logger.info(
+      {
+        email: userInfo?.email,
+        id: userInfo?.id,
+        scmTypes: userInfo?.scmConfigs?.map((c) => c?.scmType),
+      },
+      'user info'
+    )
     if (!userInfo?.email) {
       logger.warn('Could not get user email from user info')
       return null
@@ -244,7 +251,11 @@ export async function getNormalizedGitHubRepoUrl(): Promise<string | null> {
   }
 }
 
-export function getIdeVersion(appType: AppType): string {
+/**
+ * Reads the IDE version once at startup. The result is stored in
+ * repoInfo.ideVersion so no additional caching is needed here.
+ */
+function getIdeVersion(appType: AppType): string {
   switch (appType) {
     case AppType.VSCODE:
       return vscode.version
@@ -253,7 +264,7 @@ export function getIdeVersion(appType: AppType): string {
         const productJsonPath = path.join(vscode.env.appRoot, 'product.json')
         const raw = fs.readFileSync(productJsonPath, 'utf-8')
         const productJson = JSON.parse(raw)
-        return productJson.version || '0.0.0'
+        return (productJson.version as string) || '0.0.0'
       } catch (error) {
         logger.error(
           { error },

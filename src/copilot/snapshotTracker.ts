@@ -1,5 +1,5 @@
-import * as fs from 'fs'
-import * as path from 'path'
+import * as path from 'node:path'
+
 import * as vscode from 'vscode'
 
 import { logger } from '../shared/logger'
@@ -12,6 +12,9 @@ type SnapshotEntry = {
   filePath: string
   baselineContent: string
 }
+
+// Size cap to prevent unbounded memory growth (same LRU pattern as GitBlameCache)
+const MAX_SNAPSHOTS = 500
 
 export class SnapshotTracker {
   /** Workspace root for path resolution */
@@ -35,9 +38,28 @@ export class SnapshotTracker {
       return filePath
     }
     if (this.workspaceRoot) {
-      return path.join(this.workspaceRoot, filePath)
+      // Normalize and strip leading traversal, preserving directory structure
+      const normalized = path
+        .normalize(String(filePath || '').replace('\0', ''))
+        .replace(/^(\.\.(\/|\\))+/, '')
+      const resolved = path.resolve(this.workspaceRoot, normalized)
+      // Ensure the result stays within workspace root
+      if (!resolved.startsWith(this.workspaceRoot)) {
+        return this.workspaceRoot
+      }
+      return resolved
     }
     return filePath // fallback: return as-is
+  }
+
+  /** Evict oldest entries if snapshots Map exceeds MAX_SNAPSHOTS */
+  private evictIfNeeded(): void {
+    while (this.snapshots.size >= MAX_SNAPSHOTS) {
+      const oldestKey = this.snapshots.keys().next().value
+      if (oldestKey) {
+        this.snapshots.delete(oldestKey)
+      }
+    }
   }
 
   async onReadFile(evt: ToolCall): Promise<void> {
@@ -49,6 +71,7 @@ export class SnapshotTracker {
     const baselineContent = await this.readCurrentFileText(absPath)
     const prev = this.snapshots.get(absPath)
     if (!prev || now > prev.timeMs) {
+      this.evictIfNeeded()
       this.snapshots.set(absPath, {
         id: evt.id,
         timeMs: now,
@@ -79,6 +102,7 @@ export class SnapshotTracker {
     }
     // Otherwise, only update if no prev or this is newer
     if (!prev || timeMs > prev.timeMs) {
+      this.evictIfNeeded()
       this.snapshots.set(absPath, {
         attachmentId,
         timeMs,
@@ -117,7 +141,9 @@ export class SnapshotTracker {
       return doc.getText()
     }
     try {
-      return fs.readFileSync(filePath, 'utf8')
+      const uri = vscode.Uri.file(filePath)
+      const bytes = await vscode.workspace.fs.readFile(uri)
+      return Buffer.from(bytes).toString('utf8')
     } catch {
       return ''
     }

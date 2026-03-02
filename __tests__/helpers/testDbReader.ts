@@ -22,6 +22,7 @@ const FILE_EDIT_TOOLS = [
   'apply_patch',
   'write',
   'edit_file',
+  'edit_file_v2',
   'MultiEdit',
 ]
 
@@ -95,6 +96,26 @@ export function readCompletedFileEditBubbles(): DBRow[] {
 }
 
 /**
+ * Read multiple bubble rows by exact keys using a single sqlite3 query.
+ * Much faster than calling readRowsByLike per key (avoids N subprocess spawns).
+ */
+export function readBubblesByKeys(keys: string[]): DBRow[] {
+  if (keys.length === 0) {
+    return []
+  }
+
+  const dbPath = getTestDbPath()
+  if (!fs.existsSync(dbPath)) {
+    return []
+  }
+
+  const keysIn = keys.map((k) => `'${escapeSQL(k)}'`).join(', ')
+  const sql = `SELECT key, value FROM cursorDiskKV WHERE key IN (${keysIn})`
+
+  return executeQuery(dbPath, sql)
+}
+
+/**
  * Execute a SQL query using sqlite3 CLI
  */
 function executeQuery(dbPath: string, sql: string): DBRow[] {
@@ -117,10 +138,12 @@ function executeQuery(dbPath: string, sql: string): DBRow[] {
 }
 
 /**
- * Escape single quotes in SQL string literals
+ * Escape a string for use in SQL string literals (sqlite3 CLI).
+ * Handles single quotes, backslashes, and null bytes.
+ * Note: This is test-only code; the production dbWorker uses parameterized queries.
  */
 function escapeSQL(str: string): string {
-  return str.replace(/'/g, "''")
+  return str.replace(/\0/g, '').replace(/'/g, "''")
 }
 
 /**

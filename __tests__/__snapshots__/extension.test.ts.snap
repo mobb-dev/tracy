@@ -1,8 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`extension tests > 'full database scenario with thinking …' > full-thinking-state.vscdb-getCompletedFileEditBubbles-call 1`] = `[]`;
-
-exports[`extension tests > 'full database scenario with thinking …' > full-thinking-state.vscdb-getCompletedFileEditBubbles-result-1 1`] = `
+exports[`extension tests > 'full database scenario with thinking …' > full-thinking-state.vscdb-poll-result-1 1`] = `
 [
   {
     "key": "bubbleId:59ce5fe8-21af-47bd-8ace-eedc0956072b:5c0b1d2d-0615-4aa6-9b86-2e1c35baa63c",
@@ -126,9 +124,7 @@ Creating a simple random file in the repo root:
 ]
 `;
 
-exports[`extension tests > 'full database scenario without thinki…' > full-state.vscdb-getCompletedFileEditBubbles-call 1`] = `[]`;
-
-exports[`extension tests > 'full database scenario without thinki…' > full-state.vscdb-getCompletedFileEditBubbles-result-1 1`] = `
+exports[`extension tests > 'full database scenario without thinki…' > full-state.vscdb-poll-result-1 1`] = `
 [
   {
     "key": "bubbleId:5ab4c616-183d-498c-a65c-7a2935a9f46c:fda8fd24-131d-48f7-a527-d63fd600c14c",

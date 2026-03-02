@@ -10,9 +10,15 @@ import * as ts from '../src/shared/startupTimestamp'
 import {
   cleanupTestDb,
   copyDbFile,
+  readBubblesByKeys,
   readCompletedFileEditBubbles,
   readRowsByLike,
 } from './helpers/testDbReader'
+
+/** Small delay to let async activation complete before copying target DB */
+const ACTIVATION_SETTLE_MS = 200
+
+// Polling interval is set in setupEnv.ts (runs before module imports)
 
 // Mock @vscode/sqlite3 BEFORE any imports that use it
 vi.mock('@vscode/sqlite3', () => ({
@@ -108,6 +114,7 @@ vi.mock('configstore', () => ({
   default: vi.fn().mockImplementation(() => ({
     get: vi.fn(() => 'test-api-token'),
     set: vi.fn(),
+    delete: vi.fn(),
   })),
 }))
 
@@ -168,7 +175,8 @@ const uploadAiBlameHandlerFromExtensionSpy = vi
 const initDBMock = vi.fn().mockResolvedValue(undefined)
 const closeDBMock = vi.fn().mockResolvedValue(undefined)
 const getRowsByLikeMock = vi.fn()
-const getCompletedFileEditBubblesMock = vi.fn()
+const getCompletedFileEditBubblesSinceMock = vi.fn()
+const getBubblesByKeysMock = vi.fn().mockResolvedValue([])
 
 // Mock db module - uses test helper to read real data
 vi.mock('../src/cursor/db', () => ({
@@ -176,7 +184,9 @@ vi.mock('../src/cursor/db', () => ({
   closeDB: () => closeDBMock(),
   getRowsByLike: (params: { key: string; value?: string; keyOnly?: boolean }) =>
     getRowsByLikeMock(params),
-  getCompletedFileEditBubbles: () => getCompletedFileEditBubblesMock(),
+  getCompletedFileEditBubblesSince: (sinceIso: string, limit: number) =>
+    getCompletedFileEditBubblesSinceMock(sinceIso, limit),
+  getBubblesByKeys: (keys: string[]) => getBubblesByKeysMock(keys),
 }))
 
 // Mock repositoryInfo to return valid test data
@@ -217,6 +227,16 @@ vi.mock('../src/shared/uploader', async () => {
     getAuthenticatedForUpload: vi.fn(async () => undefined),
   }
 })
+
+// Mock circularLog
+vi.mock('../src/shared/circularLog', () => ({
+  initCircularLog: vi.fn(),
+  logInfo: vi.fn(),
+  logError: vi.fn(),
+  logWarn: vi.fn(),
+  logHeartbeat: vi.fn(),
+  logTimed: vi.fn(async (_label: string, fn: () => Promise<unknown>) => fn()),
+}))
 
 // Mock DailyMcpDetection
 vi.mock('../src/shared/DailyMcpDetection', () => ({
@@ -272,7 +292,8 @@ beforeEach(() => {
   initDBMock.mockClear()
   closeDBMock.mockClear()
   getRowsByLikeMock.mockClear()
-  getCompletedFileEditBubblesMock.mockClear()
+  getCompletedFileEditBubblesSinceMock.mockClear()
+  getBubblesByKeysMock.mockClear()
   uploadAiBlameHandlerFromExtensionSpy.mockClear()
 })
 
@@ -282,13 +303,15 @@ afterEach(() => {
 })
 
 describe('extension tests', () => {
+  const TEST_TIMEOUT_MS = 120_000
+
   type TestCase = {
     name: string
     initialDbFile: string
     targetDbFile: string
-    minGetCompletedFileEditBubblesCalls: number
+    minPollCalls: number
     minUploadAiBlameCalls: number
-    snapshotCallsToCheck: number
+    pollCallsToSnapshot: number
     uploadCallsToSnapshot: number
   }
 
@@ -297,18 +320,18 @@ describe('extension tests', () => {
       name: 'full database scenario without thinking models',
       initialDbFile: 'empty-state.vscdb',
       targetDbFile: 'full-state.vscdb',
-      minGetCompletedFileEditBubblesCalls: 2, // 1 startup + 1 poll
+      minPollCalls: 1,
       minUploadAiBlameCalls: 1,
-      snapshotCallsToCheck: 2,
+      pollCallsToSnapshot: 1,
       uploadCallsToSnapshot: 1,
     },
     {
       name: 'full database scenario with thinking models',
       initialDbFile: 'empty-state.vscdb',
       targetDbFile: 'full-thinking-state.vscdb',
-      minGetCompletedFileEditBubblesCalls: 2, // 1 startup + 1 poll
+      minPollCalls: 1,
       minUploadAiBlameCalls: 1,
-      snapshotCallsToCheck: 2,
+      pollCallsToSnapshot: 1,
       uploadCallsToSnapshot: 1,
     },
   ]
@@ -318,21 +341,24 @@ describe('extension tests', () => {
     async ({
       initialDbFile,
       targetDbFile,
-      minGetCompletedFileEditBubblesCalls,
+      minPollCalls,
       minUploadAiBlameCalls,
-      snapshotCallsToCheck,
+      pollCallsToSnapshot,
       uploadCallsToSnapshot,
     }) => {
       // Set up initial empty database
       copyDbFile(initialDbFile, 'state.vscdb')
 
       // Configure mocks to use test helper reading from real .vscdb files
-      getCompletedFileEditBubblesMock.mockImplementation(() =>
+      getCompletedFileEditBubblesSinceMock.mockImplementation(() =>
         Promise.resolve(readCompletedFileEditBubbles())
       )
       getRowsByLikeMock.mockImplementation(
         (params: { key: string; value?: string; keyOnly?: boolean }) =>
           Promise.resolve(readRowsByLike(params))
+      )
+      getBubblesByKeysMock.mockImplementation((keys: string[]) =>
+        Promise.resolve(readBubblesByKeys(keys))
       )
 
       const currentPath = __dirname
@@ -343,40 +369,34 @@ describe('extension tests', () => {
         subscriptions: [],
       } as any)
 
-      // Wait for initial startup call
-      await vi.waitFor(() => {
-        expect(getCompletedFileEditBubblesMock).toHaveBeenCalled()
-      })
-
-      // Verify startup call
-      expect(getCompletedFileEditBubblesMock).toHaveBeenCalledTimes(1)
-
-      // Get initial return value and snapshot it
-      const initialReturnValue =
-        await getCompletedFileEditBubblesMock.mock.results[0].value
-      expect(initialReturnValue).toMatchSnapshot(
-        `${targetDbFile}-getCompletedFileEditBubbles-call`
-      )
-
-      // Copy target DB file (simulates new data arriving)
+      // Let activation settle, then copy target DB (simulates new data arriving)
+      await new Promise((r) => globalThis.setTimeout(r, ACTIVATION_SETTLE_MS))
       copyDbFile(targetDbFile, 'state.vscdb')
 
       // Wait for polling to pick up new data
       await vi.waitFor(
         () => {
           expect(
-            getCompletedFileEditBubblesMock.mock.calls.length
-          ).toBeGreaterThanOrEqual(minGetCompletedFileEditBubblesCalls)
+            getCompletedFileEditBubblesSinceMock.mock.calls.length
+          ).toBeGreaterThanOrEqual(minPollCalls)
         },
-        { timeout: 10000 }
+        { timeout: 30000 }
       )
 
       // Snapshot polling results
-      for (let i = 1; i < snapshotCallsToCheck; i++) {
+      for (
+        let i = 0;
+        i <
+        Math.min(
+          pollCallsToSnapshot,
+          getCompletedFileEditBubblesSinceMock.mock.results.length
+        );
+        i++
+      ) {
         const callReturnValue =
-          await getCompletedFileEditBubblesMock.mock.results[i].value
+          await getCompletedFileEditBubblesSinceMock.mock.results[i].value
         expect(callReturnValue).toMatchSnapshot(
-          `${targetDbFile}-getCompletedFileEditBubbles-result-${i}`
+          `${targetDbFile}-poll-result-${i + 1}`
         )
       }
 
@@ -398,6 +418,7 @@ describe('extension tests', () => {
           `${targetDbFile}-uploadAiBlame-call-${i}`
         )
       }
-    }
+    },
+    TEST_TIMEOUT_MS
   )
-}, 120000)
+}, 60000)

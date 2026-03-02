@@ -54,6 +54,9 @@ type UIState = {
 export class TracyController {
   private disposables: vscode.Disposable[] = []
   private infoPanel?: InfoPanel
+  private selectionDebounceTimer: ReturnType<
+    typeof globalThis.setTimeout
+  > | null = null
 
   // Separate states for independent UI components
   private statusBarState: UIState = {
@@ -498,7 +501,7 @@ export class TracyController {
     }
     const doc = editor.document
 
-    if (!doc || !this.isValidFile(doc)) {
+    if (!doc || doc.isClosed || !this.isValidFile(doc)) {
       return
     }
 
@@ -516,15 +519,15 @@ export class TracyController {
     await this.handleLineChange(doc, lineNumber)
   }
 
-  private async onSelectionChange(
+  private onSelectionChange(
     event: vscode.TextEditorSelectionChangeEvent
-  ): Promise<void> {
+  ): void {
     if (!event.textEditor || event.selections.length === 0) {
       return
     }
 
     const doc = event.textEditor.document
-    if (!doc || !this.isValidFile(doc)) {
+    if (!doc || doc.isClosed || !this.isValidFile(doc)) {
       return
     }
 
@@ -539,8 +542,19 @@ export class TracyController {
       return
     }
 
-    logger.debug(`Selection changed: ${doc.uri.fsPath} at line ${lineNumber}`)
-    await this.handleLineChange(doc, lineNumber)
+    // Debounce: wait 150ms before triggering handleLineChange
+    // to avoid rapid git blame spawning on fast cursor movement
+    if (this.selectionDebounceTimer) {
+      clearTimeout(this.selectionDebounceTimer)
+    }
+    this.selectionDebounceTimer = globalThis.setTimeout(() => {
+      this.selectionDebounceTimer = null
+      if (doc.isClosed) {
+        return
+      }
+      logger.debug(`Selection changed: ${doc.uri.fsPath} at line ${lineNumber}`)
+      void this.handleLineChange(doc, lineNumber)
+    }, 150)
   }
 
   public async showInfoPanel(): Promise<void> {
@@ -548,6 +562,10 @@ export class TracyController {
   }
 
   public dispose(): void {
+    if (this.selectionDebounceTimer) {
+      clearTimeout(this.selectionDebounceTimer)
+      this.selectionDebounceTimer = null
+    }
     this.disposables.forEach((d) => d.dispose())
     if (this.infoPanel) {
       this.infoPanel.dispose()

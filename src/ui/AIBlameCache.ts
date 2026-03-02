@@ -19,7 +19,10 @@ import { configStore } from '../mobbdev_src/utils/ConfigStoreService'
 import { subscribeToBlameRequests } from '../mobbdev_src/utils/subscribe/subscribe'
 import { httpToWsUrl } from '../mobbdev_src/utils/url'
 import { getConfig } from '../shared/config'
-import { createGQLClient } from '../shared/gqlClientFactory'
+import {
+  createGQLClient,
+  invalidateOnAuthError,
+} from '../shared/gqlClientFactory'
 import { logger } from '../shared/logger'
 
 export type AIBlameAttribution = {
@@ -443,6 +446,7 @@ export class AIBlameCache {
 
       return await this.resolveBlameResult(commitSha, localCommitData)
     } catch (error) {
+      invalidateOnAuthError(error)
       logger.error(
         { error, commitSha },
         `AIBlameCache: Error analyzing commit ${commitSha}`
@@ -545,6 +549,7 @@ export async function analyzeCommitForExtensionAIBlameWrapper(
 
     return result
   } catch (err) {
+    invalidateOnAuthError(err)
     logger.error({ error: err }, 'Error during AI Blame commit analysis')
     throw err
   }
@@ -584,6 +589,7 @@ export async function GetAiBlamePrompt(
 
     return promptContent
   } catch (err) {
+    invalidateOnAuthError(err)
     logger.error({ error: err }, 'Error during GetAiBlameAttributionPrompt')
     return null
   }
@@ -619,6 +625,7 @@ export async function GetAiBlamePromptSummary(
       }
     }
   } catch (err) {
+    invalidateOnAuthError(err)
     logger.error(
       { error: err },
       'Error during GetAiBlameAttributionPromptSummary'
