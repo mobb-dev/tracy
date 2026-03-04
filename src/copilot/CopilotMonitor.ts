@@ -993,7 +993,9 @@ export class CopilotMonitor extends BaseMonitor {
           addedLines.join('\n'),
           'copilot-inline-edit',
           new Date().toISOString(),
-          AiBlameInferenceType.TabAutocomplete
+          AiBlameInferenceType.TabAutocomplete,
+          undefined,
+          record.event.filePath
         )
       }
     }

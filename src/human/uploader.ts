@@ -40,7 +40,7 @@ export async function uploadHumanChangesFromExtension(
 
   try {
     const config = getConfig()
-    const repositoryUrl = await getNormalizedGitHubRepoUrl()
+    const repositoryUrl = await getNormalizedGitHubRepoUrl(segment.uri)
     logger.info('Starting human changes upload to backend...', {
       apiUrl: config.apiUrl,
       webAppUrl: config.webAppUrl,

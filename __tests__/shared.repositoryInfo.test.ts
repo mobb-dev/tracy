@@ -1,5 +1,126 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type {
+  GitRepository,
+  RepositoryInfo,
+} from '../src/shared/repositoryInfo'
+
+const makeRepoInfo = (repos: GitRepository[]): RepositoryInfo => ({
+  repositories: repos,
+  userEmail: 'test@test.com',
+  organizationId: 'org-1',
+  appType: 'cursor',
+  ideVersion: '0.1.0',
+  mobbAppBaseUrl: '',
+})
+
+describe('getRelevantRepo', () => {
+  const mockVSCode = {
+    env: { appName: 'Cursor' },
+    workspace: { workspaceFolders: [] },
+  }
+
+  beforeEach(() => {
+    vi.resetModules()
+    vi.doMock('vscode', () => mockVSCode)
+  })
+
+  afterEach(async () => {
+    vi.resetAllMocks()
+  })
+
+  it('returns null when repoInfo is not initialized', async () => {
+    const { getRelevantRepo } = await import('../src/shared/repositoryInfo')
+    expect(getRelevantRepo('/some/path')).toBeNull()
+  })
+
+  it('returns null when repositories array is empty', async () => {
+    const { getRelevantRepo, _setRepoInfoForTesting } =
+      await import('../src/shared/repositoryInfo')
+    _setRepoInfoForTesting(makeRepoInfo([]))
+    expect(getRelevantRepo('/some/path')).toBeNull()
+  })
+
+  it('returns first repo for single-repo setup regardless of filePath', async () => {
+    const { getRelevantRepo, _setRepoInfoForTesting } =
+      await import('../src/shared/repositoryInfo')
+    const repo = {
+      gitRoot: '/workspace/project',
+      gitRepoUrl: 'https://github.com/test/repo.git',
+    }
+    _setRepoInfoForTesting(makeRepoInfo([repo]))
+    expect(getRelevantRepo('/unrelated/path')).toBe(repo)
+    expect(getRelevantRepo()).toBe(repo)
+  })
+
+  it('matches correct repo by filePath in multi-repo setup', async () => {
+    const { getRelevantRepo, _setRepoInfoForTesting } =
+      await import('../src/shared/repositoryInfo')
+    const repoA = {
+      gitRoot: '/workspace/alpha',
+      gitRepoUrl: 'https://github.com/test/alpha.git',
+    }
+    const repoB = {
+      gitRoot: '/workspace/beta',
+      gitRepoUrl: 'https://github.com/test/beta.git',
+    }
+    _setRepoInfoForTesting(makeRepoInfo([repoA, repoB]))
+    expect(getRelevantRepo('/workspace/alpha/src/index.ts')).toBe(repoA)
+    expect(getRelevantRepo('/workspace/beta/src/main.ts')).toBe(repoB)
+  })
+
+  it('avoids prefix collision: /project does not match /project-utils', async () => {
+    const { getRelevantRepo, _setRepoInfoForTesting } =
+      await import('../src/shared/repositoryInfo')
+    const repoShort = {
+      gitRoot: '/workspace/project',
+      gitRepoUrl: 'https://github.com/test/project.git',
+    }
+    const repoLong = {
+      gitRoot: '/workspace/project-utils',
+      gitRepoUrl: 'https://github.com/test/project-utils.git',
+    }
+    _setRepoInfoForTesting(makeRepoInfo([repoShort, repoLong]))
+
+    // File in /workspace/project-utils should NOT match /workspace/project
+    expect(getRelevantRepo('/workspace/project-utils/src/index.ts')).toBe(
+      repoLong
+    )
+    // File in /workspace/project should still match /workspace/project
+    expect(getRelevantRepo('/workspace/project/src/index.ts')).toBe(repoShort)
+  })
+
+  it('returns null for multi-repo when filePath matches no repo', async () => {
+    const { getRelevantRepo, _setRepoInfoForTesting } =
+      await import('../src/shared/repositoryInfo')
+    const repoA = {
+      gitRoot: '/workspace/alpha',
+      gitRepoUrl: 'https://github.com/test/alpha.git',
+    }
+    const repoB = {
+      gitRoot: '/workspace/beta',
+      gitRepoUrl: 'https://github.com/test/beta.git',
+    }
+    _setRepoInfoForTesting(makeRepoInfo([repoA, repoB]))
+    expect(getRelevantRepo('/somewhere/else/file.ts')).toBeNull()
+  })
+
+  it('returns null for multi-repo when filePath is not provided', async () => {
+    const { getRelevantRepo, _setRepoInfoForTesting } =
+      await import('../src/shared/repositoryInfo')
+    const repoA = {
+      gitRoot: '/workspace/alpha',
+      gitRepoUrl: 'https://github.com/test/alpha.git',
+    }
+    const repoB = {
+      gitRoot: '/workspace/beta',
+      gitRepoUrl: 'https://github.com/test/beta.git',
+    }
+    _setRepoInfoForTesting(makeRepoInfo([repoA, repoB]))
+    expect(getRelevantRepo()).toBeNull()
+  })
+})
+
 describe('detectAppType', () => {
   const mockVSCode = {
     env: {

@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as db from '../src/cursor/db'
-import { processBubbles, resetProcessedBubbles } from '../src/cursor/processor'
+import type { BubbleData } from '../src/cursor/processor'
+import {
+  extractFilePath,
+  processBubbles,
+  resetProcessedBubbles,
+} from '../src/cursor/processor'
 
 vi.mock('vscode', () => {
   return {}
@@ -543,6 +548,304 @@ describe('processor tests', () => {
 
       const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
       expect(changes).toHaveLength(0)
+    })
+  })
+
+  describe('extractFilePath', () => {
+    it('extracts file path from rawArgs.file_path', () => {
+      const bubble: BubbleData = {
+        createdAt: '2024-01-01T12:00:00.000Z',
+        tokenCount: { inputTokens: 0, outputTokens: 0 },
+        type: 2,
+        toolFormerData: {
+          name: 'edit_file',
+          status: 'completed',
+          toolCallId: 'tool-1',
+          params: '{}',
+          result: '{}',
+          rawArgs: JSON.stringify({
+            file_path: '/home/user/project/src/index.ts',
+          }),
+          userDecision: 'accepted',
+        },
+      }
+
+      expect(extractFilePath(bubble)).toBe('/home/user/project/src/index.ts')
+    })
+
+    it('falls back to codeBlocks[0].uri.path when rawArgs has no file_path', () => {
+      const bubble: BubbleData = {
+        createdAt: '2024-01-01T12:00:00.000Z',
+        tokenCount: { inputTokens: 0, outputTokens: 0 },
+        type: 2,
+        toolFormerData: {
+          name: 'some_tool',
+          status: 'completed',
+          toolCallId: 'tool-2',
+          params: '{}',
+          result: '{}',
+          rawArgs: JSON.stringify({ something: 'else' }),
+          userDecision: 'accepted',
+        },
+        codeBlocks: [
+          {
+            codeBlockIdx: 0,
+            content: 'some code',
+            languageId: 'typescript',
+            uri: { path: '/home/user/project/src/utils.ts', scheme: 'file' },
+          },
+        ],
+      }
+
+      expect(extractFilePath(bubble)).toBe('/home/user/project/src/utils.ts')
+    })
+
+    it('returns undefined when neither rawArgs nor codeBlocks have a file path', () => {
+      const bubble: BubbleData = {
+        createdAt: '2024-01-01T12:00:00.000Z',
+        tokenCount: { inputTokens: 0, outputTokens: 0 },
+        type: 2,
+        toolFormerData: {
+          name: 'some_tool',
+          status: 'completed',
+          toolCallId: 'tool-3',
+          params: '{}',
+          result: '{}',
+          rawArgs: '{}',
+          userDecision: 'accepted',
+        },
+      }
+
+      expect(extractFilePath(bubble)).toBeUndefined()
+    })
+
+    it('ignores relative paths in rawArgs', () => {
+      const bubble: BubbleData = {
+        createdAt: '2024-01-01T12:00:00.000Z',
+        tokenCount: { inputTokens: 0, outputTokens: 0 },
+        type: 2,
+        toolFormerData: {
+          name: 'edit_file',
+          status: 'completed',
+          toolCallId: 'tool-4',
+          params: '{}',
+          result: '{}',
+          rawArgs: JSON.stringify({ file_path: 'relative/path.ts' }),
+          userDecision: 'accepted',
+        },
+      }
+
+      expect(extractFilePath(bubble)).toBeUndefined()
+    })
+
+    it('handles invalid rawArgs JSON gracefully', () => {
+      const bubble: BubbleData = {
+        createdAt: '2024-01-01T12:00:00.000Z',
+        tokenCount: { inputTokens: 0, outputTokens: 0 },
+        type: 2,
+        toolFormerData: {
+          name: 'edit_file',
+          status: 'completed',
+          toolCallId: 'tool-5',
+          params: '{}',
+          result: '{}',
+          rawArgs: 'not valid json',
+          userDecision: 'accepted',
+        },
+      }
+
+      expect(extractFilePath(bubble)).toBeUndefined()
+    })
+
+    it('returns undefined when no toolFormerData', () => {
+      const bubble: BubbleData = {
+        createdAt: '2024-01-01T12:00:00.000Z',
+        tokenCount: { inputTokens: 0, outputTokens: 0 },
+        type: 1,
+        text: 'user prompt',
+      }
+
+      expect(extractFilePath(bubble)).toBeUndefined()
+    })
+
+    it('extracts file path from rawArgs.path (read_file_v2)', () => {
+      const bubble: BubbleData = {
+        createdAt: '2024-01-01T12:00:00.000Z',
+        tokenCount: { inputTokens: 0, outputTokens: 0 },
+        type: 2,
+        toolFormerData: {
+          name: 'read_file_v2',
+          status: 'completed',
+          toolCallId: 'tool-path-1',
+          params: '{}',
+          result: '{}',
+          rawArgs: JSON.stringify({
+            path: '/Users/user/proj/webgoat/LICENSE.txt',
+          }),
+          userDecision: 'accepted',
+        },
+      }
+
+      expect(extractFilePath(bubble)).toBe(
+        '/Users/user/proj/webgoat/LICENSE.txt'
+      )
+    })
+
+    it('extracts file path from params.relativeWorkspacePath (edit_file_v2)', () => {
+      const bubble: BubbleData = {
+        createdAt: '2024-01-01T12:00:00.000Z',
+        tokenCount: { inputTokens: 0, outputTokens: 0 },
+        type: 2,
+        toolFormerData: {
+          name: 'edit_file_v2',
+          status: 'completed',
+          toolCallId: 'tool-params-1',
+          params: JSON.stringify({
+            relativeWorkspacePath: '/Users/user/proj/webgoat/LICENSE.txt',
+            streamingContent: '@@\n+some addition\n',
+          }),
+          result: JSON.stringify({
+            beforeContentId: 'composer.content.abc',
+            afterContentId: 'composer.content.def',
+          }),
+          rawArgs: '',
+          userDecision: 'accepted',
+        },
+      }
+
+      expect(extractFilePath(bubble)).toBe(
+        '/Users/user/proj/webgoat/LICENSE.txt'
+      )
+    })
+
+    it('extracts file path from params.targetFile when rawArgs has no path', () => {
+      const bubble: BubbleData = {
+        createdAt: '2024-01-01T12:00:00.000Z',
+        tokenCount: { inputTokens: 0, outputTokens: 0 },
+        type: 2,
+        toolFormerData: {
+          name: 'read_file_v2',
+          status: 'completed',
+          toolCallId: 'tool-params-2',
+          params: JSON.stringify({
+            targetFile: '/Users/user/proj/dataset/data.json',
+          }),
+          result: '{}',
+          rawArgs: '{}',
+          userDecision: 'accepted',
+        },
+      }
+
+      expect(extractFilePath(bubble)).toBe('/Users/user/proj/dataset/data.json')
+    })
+
+    it('prefers rawArgs over params when both have paths', () => {
+      const bubble: BubbleData = {
+        createdAt: '2024-01-01T12:00:00.000Z',
+        tokenCount: { inputTokens: 0, outputTokens: 0 },
+        type: 2,
+        toolFormerData: {
+          name: 'edit_file',
+          status: 'completed',
+          toolCallId: 'tool-priority-1',
+          params: JSON.stringify({
+            relativeWorkspacePath: '/Users/user/proj/other/file.ts',
+          }),
+          result: '{}',
+          rawArgs: JSON.stringify({
+            file_path: '/Users/user/proj/correct/file.ts',
+          }),
+          userDecision: 'accepted',
+        },
+      }
+
+      expect(extractFilePath(bubble)).toBe('/Users/user/proj/correct/file.ts')
+    })
+  })
+
+  describe('filePath on ProcessedChange', () => {
+    it('includes filePath from rawArgs on processed change', async () => {
+      const filePath = '/home/user/project/src/index.ts'
+      const bubble = {
+        key: 'bubbleId:xxx:yyy',
+        value: JSON.stringify({
+          createdAt: '3001-01-01T12:00:00.000Z',
+          toolFormerData: {
+            name: 'edit_file',
+            status: 'completed',
+            userDecision: 'accepted',
+            toolCallId: 'tool-call-fp-1',
+            rawArgs: JSON.stringify({ file_path: filePath }),
+            additionalData: {
+              codeblockId: 'codeblock-fp',
+            },
+            result: JSON.stringify({
+              diff: {
+                chunks: [{ diffString: '+ new line' }],
+              },
+            }),
+          },
+        }),
+      }
+
+      getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
+
+      const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
+
+      expect(changes).toHaveLength(1)
+      expect(changes[0].filePath).toBe(filePath)
+    })
+
+    it('includes filePath on edit_file_v2 processed change', async () => {
+      const filePath = '/home/user/project/src/component.tsx'
+      const bubble = {
+        key: 'bubbleId:xxx:yyy',
+        value: JSON.stringify({
+          createdAt: '3001-01-01T12:00:00.000Z',
+          toolFormerData: {
+            name: 'edit_file_v2',
+            status: 'completed',
+            toolCallId: 'toolu_fp2',
+            rawArgs: JSON.stringify({ file_path: filePath }),
+            params: JSON.stringify({
+              relativeWorkspacePath: '/path/to/component.tsx',
+            }),
+            result: JSON.stringify({
+              beforeContentId: 'content-before',
+              afterContentId: 'content-after',
+            }),
+            additionalData: {},
+          },
+        }),
+      }
+
+      getComposerContent
+        .mockResolvedValueOnce('old content\n')
+        .mockResolvedValueOnce('old content\nnew line\n')
+
+      getRowsByLike.mockResolvedValueOnce([
+        createComposerRow('composerData:xxx'),
+      ])
+
+      const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
+
+      expect(changes).toHaveLength(1)
+      expect(changes[0].filePath).toBe(filePath)
+    })
+
+    it('sets filePath to undefined when no file path available', async () => {
+      const bubble = createBubbleRow(
+        'bubbleId:xxx:yyy',
+        'codeblock-nofp',
+        '3001-01-01T12:00:00.000Z'
+      )
+
+      getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
+
+      const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
+
+      expect(changes).toHaveLength(1)
+      expect(changes[0].filePath).toBeUndefined()
     })
   })
 

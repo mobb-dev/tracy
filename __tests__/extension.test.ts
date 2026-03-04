@@ -196,8 +196,12 @@ vi.mock('../src/shared/repositoryInfo', async () => {
   >('../src/shared/repositoryInfo')
 
   const mockRepoInfo = {
-    gitRepoUrl: 'https://github.com/test/repo.git',
-    gitRoot: '/test/workspace',
+    repositories: [
+      {
+        gitRepoUrl: 'https://github.com/test/repo.git',
+        gitRoot: '/test/workspace',
+      },
+    ],
     userEmail: 'test@example.com',
     organizationId: 'test-org-id',
     appType: 'cursor',

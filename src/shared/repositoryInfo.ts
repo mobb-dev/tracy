@@ -1,7 +1,7 @@
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import { setTimeout } from 'node:timers/promises'
 
-import * as fs from 'fs'
-import * as path from 'path'
 import * as vscode from 'vscode'
 
 import { GitService } from '../mobbdev_src/features/analysis/scm/services/GitService'
@@ -16,6 +16,169 @@ export let repoInfo: RepositoryInfo | null = null
 
 export async function initRepoInfo(): Promise<void> {
   repoInfo = await getRepositoryInfo()
+}
+
+/**
+ * Refreshes only the git repositories in the existing repoInfo.
+ * This is more efficient than full re-initialization when we just need to detect newly added repos.
+ * @returns true if repositories were successfully refreshed, false if no existing repoInfo to update
+ */
+export async function refreshRepositories(): Promise<boolean> {
+  if (!repoInfo) {
+    logger.warn('No existing repoInfo to refresh, call initRepoInfo() first')
+    return false
+  }
+
+  try {
+    // Wait for workspace folders (same as in getRepositoryInfo)
+    const workspaceFolders = await waitForWorkspaceFolders()
+    if (workspaceFolders.length === 0) {
+      logger.warn('No workspace folders found during repository refresh')
+      return false
+    }
+
+    // Get all git repositories across all workspace folders
+    const allRepositories: GitRepository[] = []
+    for (const folder of workspaceFolders) {
+      const repos = await getWorkspaceGitRepositories(folder)
+      allRepositories.push(...repos)
+    }
+
+    // Deduplicate by gitRoot (same repo may appear via multiple workspace folders)
+    const seen = new Set<string>()
+    const gitRepositories = allRepositories.filter((r) => {
+      if (seen.has(r.gitRoot)) {
+        return false
+      }
+      seen.add(r.gitRoot)
+      return true
+    })
+
+    // Update only the repositories in the existing repoInfo
+    const previousCount = repoInfo.repositories.length
+    repoInfo.repositories = gitRepositories
+
+    logger.info(
+      `Repository refresh completed: ${previousCount} -> ${gitRepositories.length} repositories`
+    )
+
+    if (gitRepositories.length > previousCount) {
+      logger.info('New repositories detected after refresh')
+    }
+
+    return true
+  } catch (error) {
+    logger.error({ error }, 'Failed to refresh repositories')
+    return false
+  }
+}
+
+/** @internal Test-only helper to set repoInfo state. */
+export function _setRepoInfoForTesting(info: RepositoryInfo | null): void {
+  repoInfo = info
+}
+
+/**
+ * Finds all git repositories within a directory.
+ * Recursively searches subdirectories (max depth 2) for .git folders.
+ * Optimized for performance with parallel processing and smart exclusions.
+ * @param directory The root directory to search in
+ * @param maxDepth Maximum recursion depth (default: 2, reduced for performance)
+ * @returns Array of absolute paths to git repository roots
+ */
+async function findGitRepositories(
+  directory: string,
+  maxDepth: number = 2
+): Promise<string[]> {
+  const gitRepos: string[] = []
+
+  // Common directories to skip for performance
+  const skipDirectories = new Set([
+    'node_modules',
+    '.git',
+    '.svn',
+    '.hg',
+    'build',
+    'dist',
+    'target',
+    'bin',
+    'obj',
+    '.next',
+    '.nuxt',
+    'coverage',
+    '.nyc_output',
+    'tmp',
+    'temp',
+    '.cache',
+    '.vscode',
+    '.idea',
+    '__pycache__',
+    '.pytest_cache',
+    'venv',
+    '.venv',
+    '.env',
+    'vendor',
+  ])
+
+  async function searchDirectory(
+    dir: string,
+    currentDepth: number
+  ): Promise<void> {
+    if (currentDepth > maxDepth) {
+      return
+    }
+
+    try {
+      const entries = await fs.promises.readdir(dir, { withFileTypes: true })
+
+      // Quick check if current directory has .git folder
+      const hasGit = entries.some(
+        (entry) => entry.isDirectory() && entry.name === '.git'
+      )
+      if (hasGit) {
+        gitRepos.push(dir)
+        return // Don't search nested repos
+      }
+
+      // Collect subdirectories to search in parallel
+      const subDirectories: string[] = []
+      for (const entry of entries) {
+        if (
+          entry.isDirectory() &&
+          !entry.name.startsWith('.') &&
+          !skipDirectories.has(entry.name)
+        ) {
+          if (entry.name.includes('..') || entry.name.includes('\0')) {
+            continue // Skip suspicious entries
+          }
+          // Pre-filters above already reject traversal attempts (.., \0, dot-prefixed).
+          // Use path.join directly and verify the result stays within the parent.
+          const subPath = path.join(dir, entry.name)
+          if (!subPath.startsWith(dir + path.sep)) {
+            continue // Skip if resolved path escapes the parent directory
+          }
+          subDirectories.push(subPath)
+        }
+      }
+
+      // Search subdirectories in parallel (but limit concurrency to avoid overwhelming the system)
+      const chunkSize = 10 // Process 10 directories at a time
+      for (let i = 0; i < subDirectories.length; i += chunkSize) {
+        const chunk = subDirectories.slice(i, i + chunkSize)
+        await Promise.all(
+          chunk.map((subDir) => searchDirectory(subDir, currentDepth + 1))
+        )
+      }
+    } catch (error) {
+      // Ignore permission errors and continue silently
+      if (currentDepth === 0) {
+        logger.debug(`Error scanning root directory ${dir}:`, error)
+      }
+    }
+  }
+
+  await searchDirectory(directory, 0)
+  return gitRepos
 }
 
 /**
@@ -86,13 +249,17 @@ function detectIDEFromEnv(): IDE {
   return 'unknown'
 }
 
-export type RepositoryInfo = {
+export type GitRepository = {
   gitRepoUrl: string
   /**
    * Absolute path to the git repository root (top-level).
    * This may differ from the VS Code workspace folder when a subdirectory is opened.
    */
   gitRoot: string
+}
+
+export type RepositoryInfo = {
+  repositories: GitRepository[]
   userEmail: string
   organizationId: string
   appType: AppType
@@ -105,51 +272,62 @@ export type RepositoryInfo = {
  * VS Code/Cursor may not have workspaceFolders populated immediately on startup,
  * even after the onStartupFinished activation event fires.
  */
-async function waitForWorkspaceFolder(
+async function waitForWorkspaceFolders(
   maxWaitMs: number = 5000,
   pollIntervalMs: number = 200
-): Promise<string | null> {
+): Promise<string[]> {
   const startTime = Date.now()
 
   while (Date.now() - startTime < maxWaitMs) {
-    const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-    if (folder) {
-      return folder
+    const folders = vscode.workspace.workspaceFolders
+    if (folders && folders.length > 0) {
+      return folders.map((f) => f.uri.fsPath)
     }
     await setTimeout(pollIntervalMs)
   }
 
-  return null
+  return []
 }
 
 export async function getRepositoryInfo(): Promise<RepositoryInfo | null> {
-  // Wait for workspace folder with retry logic (handles race condition on startup)
-  const workspaceFolder = await waitForWorkspaceFolder()
-  if (!workspaceFolder) {
-    logger.warn('No workspace folder found after waiting')
+  // Wait for workspace folders with retry logic (handles race condition on startup)
+  const workspaceFolders = await waitForWorkspaceFolders()
+  if (workspaceFolders.length === 0) {
+    logger.warn('No workspace folders found after waiting')
     return null
   }
 
-  logger.info(`workspace folder: ${workspaceFolder}`)
+  logger.info(`workspace folders: ${workspaceFolders.join(', ')}`)
 
   try {
-    // Use GitService from CLI for git operations
-    const gitService = new GitService(workspaceFolder)
+    // Get all git repositories across all workspace folders
+    const allRepositories: GitRepository[] = []
+    for (const folder of workspaceFolders) {
+      const repos = await getWorkspaceGitRepositories(folder)
+      allRepositories.push(...repos)
+    }
 
-    const isRepo = await gitService.isGitRepository()
-    if (!isRepo) {
-      logger.warn('Could not find git repository root')
+    // Deduplicate by gitRoot (same repo may appear via multiple workspace folders)
+    const seen = new Set<string>()
+    const gitRepositories = allRepositories.filter((r) => {
+      if (seen.has(r.gitRoot)) {
+        return false
+      }
+      seen.add(r.gitRoot)
+      return true
+    })
+
+    if (gitRepositories.length === 0) {
+      logger.warn('No git repositories found in workspace')
       return null
     }
 
-    const gitRoot = await gitService.getGitRoot()
-    logger.info(`git root: ${gitRoot}`)
-
-    // Get git remote URL (already normalized by GitService)
-    const gitUrl = await gitService.getRemoteUrl()
-    if (!gitUrl) {
-      logger.warn('Could not determine git remote URL')
-      return null
+    logger.info(`Found ${gitRepositories.length} git repositories in workspace`)
+    if (gitRepositories.length > 1) {
+      logger.info(
+        'Multi-repo setup detected:',
+        gitRepositories.map((r) => r.gitRoot)
+      )
     }
 
     // Get organization ID from user info
@@ -179,8 +357,7 @@ export async function getRepositoryInfo(): Promise<RepositoryInfo | null> {
     const appType = detectAppType()
     const IDEversion = getIdeVersion(appType)
     const repoInfo: RepositoryInfo = {
-      gitRepoUrl: gitUrl,
-      gitRoot,
+      repositories: gitRepositories,
       userEmail: userInfo.email,
       organizationId: String(organizationId),
       appType,
@@ -191,6 +368,83 @@ export async function getRepositoryInfo(): Promise<RepositoryInfo | null> {
   } catch (error) {
     logger.error({ error }, 'Failed to get repository info')
     return null
+  }
+}
+
+/**
+ * Gets all git repositories found in the current workspace.
+ * Useful for debugging multi-repo setups or providing repository selection UI.
+ * @returns Array of GitRepository objects, or empty array if none found
+ */
+export async function getWorkspaceGitRepositories(
+  workspaceFolder: string
+): Promise<GitRepository[]> {
+  try {
+    const results: GitRepository[] = []
+
+    // Check if the workspace folder itself is a git repository
+    const gitService = new GitService(workspaceFolder)
+    const isRepo = await gitService.isGitRepository()
+
+    if (isRepo) {
+      const gitRoot = await gitService.getGitRoot()
+      const gitUrl = await gitService.getRemoteUrl()
+
+      if (gitUrl) {
+        results.push({ gitRoot, gitRepoUrl: gitUrl })
+        logger.info(`Found git repository at workspace root: ${gitRoot}`)
+      } else {
+        logger.warn('Git repository found but no remote URL available')
+      }
+    }
+
+    // Always search for nested repositories (submodules, monorepo children).
+    // findGitRepositories already skips .git so it won't re-find the root repo,
+    // but we deduplicate by gitRoot below just in case.
+    const gitRepoPaths = await findGitRepositories(workspaceFolder)
+
+    if (gitRepoPaths.length > 0) {
+      logger.debug(
+        `Scanning ${gitRepoPaths.length} nested git candidate(s) in ${workspaceFolder}`
+      )
+
+      const repoResults = await Promise.all(
+        gitRepoPaths.map(async (repoPath): Promise<GitRepository | null> => {
+          try {
+            const repoGitService = new GitService(repoPath)
+            const repoIsGit = await repoGitService.isGitRepository()
+
+            if (repoIsGit) {
+              const gitUrl = await repoGitService.getRemoteUrl()
+              if (gitUrl) {
+                return { gitRoot: repoPath, gitRepoUrl: gitUrl }
+              }
+              logger.warn(`Repository ${repoPath} has no remote URL, skipping`)
+            }
+            return null
+          } catch (error) {
+            logger.warn(`Error processing repository ${repoPath}:`, error)
+            return null
+          }
+        })
+      )
+      // Deduplicate by gitRoot (findGitRepositories re-finds the root at depth 0)
+      const existingRoots = new Set(results.map((r) => r.gitRoot))
+      for (const repo of repoResults) {
+        if (repo && !existingRoots.has(repo.gitRoot)) {
+          logger.info(
+            `Added nested repository: ${repo.gitRoot} -> ${repo.gitRepoUrl}`
+          )
+          results.push(repo)
+          existingRoots.add(repo.gitRoot)
+        }
+      }
+    }
+
+    return results
+  } catch (error) {
+    logger.error({ error }, 'Failed to get workspace git repositories')
+    return []
   }
 }
 
@@ -227,28 +481,92 @@ function getAppBaseUrl(): string {
 }
 
 /**
- * Gets the normalized GitHub repository URL from the current workspace.
- * Returns null if not in a git repository or if not a GitHub repository.
- * Only GitHub URLs are supported; non-GitHub repos return null.
+ * Gets the Git repository information for a given file path.
+ * Exported for testing; prefer getNormalizedGitHubRepoUrl for production use.
+ * @param filePath The file path to check
+ * @returns The GitRepository if found, otherwise null
  */
-export async function getNormalizedGitHubRepoUrl(): Promise<string | null> {
-  const workspaceFolder = await waitForWorkspaceFolder()
-  if (!workspaceFolder) {
+export function getRelevantRepo(filePath?: string): GitRepository | null {
+  if (!repoInfo) {
+    logger.error('Repository info is not initialized')
+    return null
+  }
+  if (repoInfo.repositories.length === 0) {
+    logger.warn('No repositories found in repository info')
+    return null
+  } else if (repoInfo.repositories.length === 1) {
+    return repoInfo.repositories[0]
+  } else if (filePath) {
+    // Sort by longest gitRoot first to prefer the most specific match
+    // (avoids /project matching /project-utils)
+    const sorted = [...repoInfo.repositories].sort(
+      (a, b) => b.gitRoot.length - a.gitRoot.length
+    )
+    for (const repo of sorted) {
+      if (
+        filePath.startsWith(repo.gitRoot + path.sep) ||
+        filePath === repo.gitRoot
+      ) {
+        return repo
+      }
+    }
+    logger.warn('No repository found matching the provided file path')
     return null
   }
 
-  try {
-    const gitService = new GitService(workspaceFolder)
-    const isRepo = await gitService.isGitRepository()
-    if (!isRepo) {
-      return null
+  logger.warn(
+    'Multiple repositories found but no file path provided to determine relevant repository'
+  )
+  return null
+}
+
+/**
+ * Gets the normalized GitHub repository URL from the current workspace.
+ * Returns null if not in a git repository or if not a GitHub repository.
+ * Only GitHub URLs are supported; non-GitHub repos return null.
+ * For multi-repo workspaces, returns the first GitHub repository found.
+ * If no repo is found for the given filePath, triggers a rescan to detect newly added repositories.
+ */
+export async function getNormalizedGitHubRepoUrl(
+  filePath?: string
+): Promise<string | null> {
+  let repo = getRelevantRepo(filePath)
+
+  // If no repo found and we have a filePath, try refreshing repos in case new ones were added
+  if (!repo && filePath) {
+    logger.info(
+      `No repository found for file path: ${filePath}, refreshing repository list`
+    )
+    const refreshed = await refreshRepositories()
+
+    if (refreshed) {
+      repo = getRelevantRepo(filePath)
+
+      if (repo) {
+        logger.info(`Found repository after refresh: ${repo.gitRoot}`)
+      } else {
+        logger.warn(
+          `Still no git repository found for file path after refresh: ${filePath}`
+        )
+      }
+    } else {
+      logger.warn('Failed to refresh repositories')
     }
-    const remoteUrl = await gitService.getRemoteUrl()
-    const parsed = parseScmURL(remoteUrl)
-    return parsed?.scmType === ScmType.GitHub ? remoteUrl : null
-  } catch {
+  }
+
+  if (!repo) {
+    if (filePath) {
+      logger.warn(`No git repository found for file path: ${filePath}`)
+    }
     return null
   }
+
+  const parsed = parseScmURL(repo.gitRepoUrl)
+  if (parsed?.scmType === ScmType.GitHub) {
+    return repo.gitRepoUrl
+  }
+
+  return null
 }
 
 /**

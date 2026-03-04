@@ -17,35 +17,25 @@ type SnapshotEntry = {
 const MAX_SNAPSHOTS = 500
 
 export class SnapshotTracker {
-  /** Workspace root for path resolution */
-  private readonly workspaceRoot: string | undefined
   /** filePath -> most recent snapshot (read or attachment) */
   private snapshots = new Map<string, SnapshotEntry>()
 
-  constructor() {
-    // Try to get workspace root from VS Code API
-    if (
-      vscode.workspace.workspaceFolders &&
-      vscode.workspace.workspaceFolders.length > 0
-    ) {
-      this.workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath
-    }
-  }
-
-  /** Normalize a file path to absolute using workspace root if needed */
+  /** Normalize a file path to absolute using the correct workspace folder. */
   private resolveToAbsolutePath(filePath: string): string {
     if (path.isAbsolute(filePath)) {
       return filePath
     }
-    if (this.workspaceRoot) {
-      // Normalize and strip leading traversal, preserving directory structure
-      const normalized = path
-        .normalize(String(filePath || '').replace('\0', ''))
-        .replace(/^(\.\.(\/|\\))+/, '')
-      const resolved = path.resolve(this.workspaceRoot, normalized)
-      // Ensure the result stays within workspace root
-      if (!resolved.startsWith(this.workspaceRoot)) {
-        return this.workspaceRoot
+
+    // Resolve relative path against the first workspace folder,
+    // with path traversal protection to prevent escaping the workspace.
+    const wsFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+    if (wsFolder) {
+      const resolved = path.resolve(wsFolder, filePath)
+      if (!resolved.startsWith(wsFolder + path.sep) && resolved !== wsFolder) {
+        logger.warn(
+          `Path traversal blocked: ${filePath} resolved outside workspace`
+        )
+        return wsFolder
       }
       return resolved
     }

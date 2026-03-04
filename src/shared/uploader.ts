@@ -5,15 +5,33 @@ import {
   type UploadAiBlameResult,
 } from '../mobbdev_src/args/commands/upload_ai_blame'
 import { AiBlameInferenceType } from '../mobbdev_src/features/analysis/scm/generates/client_generates'
+import { logInfo } from './circularLog'
 import { getConfig } from './config'
 import { logger } from './logger'
 import { getNormalizedGitHubRepoUrl } from './repositoryInfo'
 
 export async function uploadCursorChanges(changes: ProcessedChange[]) {
-  // Get the normalized GitHub repository URL once for all changes
-  const repositoryUrl = await getNormalizedGitHubRepoUrl()
+  // Cache repo URL lookups within the batch to avoid repeated scans
+  const repoUrlCache = new Map<string | undefined, string | null>()
 
   for (const change of changes) {
+    // Resolve the repository URL per change using the edited file path.
+    // Falls back to first workspace repo when filePath is not available.
+    let repositoryUrl: string | null
+    if (repoUrlCache.has(change.filePath)) {
+      repositoryUrl = repoUrlCache.get(change.filePath) ?? null
+    } else {
+      repositoryUrl = await getNormalizedGitHubRepoUrl(change.filePath)
+      repoUrlCache.set(change.filePath, repositoryUrl)
+    }
+    logger.debug(
+      {
+        filePath: change.filePath,
+        repositoryUrl,
+        composerId: change.composerId,
+      },
+      'Cursor per-change repo resolution'
+    )
     logger.info(
       `Uploading inference for model ${change.model} with createdAt ${change.createdAt.toISOString()}: ${change.additions.slice(0, 100)}...`
     )
@@ -72,6 +90,11 @@ export async function uploadCursorChanges(changes: ProcessedChange[]) {
         })
 
       logger.info('Upload completed successfully')
+      logInfo('Inference uploaded', {
+        tool: 'Cursor',
+        model: change.model,
+        repositoryUrl,
+      })
 
       // Log sanitization counts with metadata
       logger.info(
@@ -104,13 +127,18 @@ export async function uploadCopilotChanges(
   model: string,
   responseTime: string,
   blameType: AiBlameInferenceType = AiBlameInferenceType.Chat,
-  sessionId?: string
+  sessionId?: string,
+  filePath?: string
 ) {
   logger.info(`Uploading Copilot changes`, { sessionId })
 
   try {
     const config = getConfig()
-    const repositoryUrl = await getNormalizedGitHubRepoUrl()
+    const repositoryUrl = await getNormalizedGitHubRepoUrl(filePath)
+    logger.debug(
+      { filePath, repositoryUrl, sessionId },
+      'Copilot per-change repo resolution'
+    )
     logger.info('Starting Copilot upload to backend...', {
       apiUrl: config.apiUrl,
       webAppUrl: config.webAppUrl,
@@ -130,6 +158,11 @@ export async function uploadCopilotChanges(
         repositoryUrl,
       }
     )
+    logInfo('Inference uploaded', {
+      tool: 'Copilot',
+      model,
+      repositoryUrl,
+    })
 
     // Log sanitization counts with metadata
     logger.info(

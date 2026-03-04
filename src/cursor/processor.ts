@@ -1,3 +1,5 @@
+import * as path from 'node:path'
+
 import { diffLines } from 'diff'
 
 import { AiBlameInferenceType } from '../mobbdev_src/features/analysis/scm/generates/client_generates'
@@ -69,6 +71,8 @@ export type ProcessedChange = {
   model: string
   type: AiBlameInferenceType
   composerId?: string
+  /** Absolute path to the edited file, used for per-file repository resolution. */
+  filePath?: string
 }
 
 export type ProcessBubblesResult = {
@@ -79,6 +83,86 @@ export type ProcessBubblesResult = {
 
 export function resetProcessedBubbles() {
   uploadedToolCallIds.clear()
+}
+
+/**
+ * Extract the absolute file path from a bubble's tool call data.
+ *
+ * Cursor stores the file path in different fields depending on the tool:
+ *  - edit_file (legacy): rawArgs.file_path
+ *  - edit_file_v2:       params.relativeWorkspacePath (often absolute despite the name)
+ *  - read_file_v2:       rawArgs.path  OR  params.targetFile
+ *  - glob_file_search:   rawArgs.targetDirectory (directory, not file)
+ *
+ * Strategy (ordered by reliability):
+ * 1. Parse rawArgs JSON → file_path | path | targetFile
+ * 2. Parse params JSON  → relativeWorkspacePath | targetFile
+ * 3. Fall back to codeBlocks[0].uri.path
+ */
+export function extractFilePath(bubbleData: BubbleData): string | undefined {
+  const toolName = bubbleData.toolFormerData?.name
+  const rawArgs = bubbleData.toolFormerData?.rawArgs
+  const params = bubbleData.toolFormerData?.params
+
+  // 1. Try rawArgs (multiple possible field names)
+  if (rawArgs) {
+    try {
+      const parsed = JSON.parse(rawArgs) as Record<string, unknown>
+      const candidate =
+        (parsed.file_path as string) ||
+        (parsed.path as string) ||
+        (parsed.targetFile as string)
+      if (candidate && path.isAbsolute(candidate)) {
+        logger.debug(
+          { toolName, filePath: candidate, source: 'rawArgs' },
+          'extractFilePath: resolved from rawArgs'
+        )
+        return candidate
+      }
+    } catch {
+      // rawArgs may not be valid JSON for some tool types
+    }
+  }
+
+  // 2. Try params (edit_file_v2 stores path in relativeWorkspacePath)
+  if (params) {
+    try {
+      const parsed = JSON.parse(params) as Record<string, unknown>
+      const candidate =
+        (parsed.relativeWorkspacePath as string) ||
+        (parsed.targetFile as string)
+      if (candidate && path.isAbsolute(candidate)) {
+        logger.debug(
+          { toolName, filePath: candidate, source: 'params' },
+          'extractFilePath: resolved from params'
+        )
+        return candidate
+      }
+    } catch {
+      // params may not be valid JSON
+    }
+  }
+
+  // 3. Fall back to codeBlocks
+  const codeBlockPath = bubbleData.codeBlocks?.[0]?.uri?.path
+  if (codeBlockPath && path.isAbsolute(codeBlockPath)) {
+    logger.debug(
+      { toolName, filePath: codeBlockPath, source: 'codeBlocks' },
+      'extractFilePath: resolved from codeBlocks fallback'
+    )
+    return codeBlockPath
+  }
+
+  logger.debug(
+    {
+      toolName,
+      hasRawArgs: !!rawArgs,
+      hasParams: !!params,
+      hasCodeBlocks: !!bubbleData.codeBlocks?.length,
+    },
+    'extractFilePath: no file path found'
+  )
+  return undefined
 }
 
 function trackToolCallId(id: string): void {
@@ -292,6 +376,7 @@ async function processBubble(
     createdAt,
     composerId
   )
+  const filePath = extractFilePath(bubbleData)
 
   return {
     additions,
@@ -300,6 +385,7 @@ async function processBubble(
     model,
     type: AiBlameInferenceType.Chat,
     composerId,
+    filePath,
   }
 }
 
@@ -393,6 +479,7 @@ async function processEditFileV2Bubble(
     createdAt,
     composerId
   )
+  const filePath = extractFilePath(bubbleData)
 
   return {
     additions,
@@ -401,6 +488,7 @@ async function processEditFileV2Bubble(
     model,
     type: AiBlameInferenceType.Chat,
     composerId,
+    filePath,
   }
 }
 

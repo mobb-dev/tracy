@@ -129,27 +129,43 @@ function initStatusBar(context: vscode.ExtensionContext): StatusBarView {
 }
 
 function setupView(context: vscode.ExtensionContext): void {
-  if (!repoInfo || !repoInfo.organizationId || !repoInfo.gitRepoUrl) {
+  if (
+    !repoInfo ||
+    !repoInfo.organizationId ||
+    !repoInfo.repositories ||
+    repoInfo.repositories.length === 0
+  ) {
     logger.error('Repository info is not available for view setup')
     return
   }
+
+  // View/blame features currently operate on a single repo. In multi-repo
+  // workspaces, use the first repository; full multi-repo view support is planned.
+  if (repoInfo.repositories.length > 1) {
+    logger.info(
+      `Multi-repo workspace: view setup using primary repo (${repoInfo.repositories[0].gitRoot})`
+    )
+  }
+
+  const gitRepo = repoInfo.repositories[0]
+
   if (!statusBar) {
     logger.error('Status bar is not available for view setup')
     return
   }
   aiBlameCache = new AIBlameCache(
-    repoInfo.gitRepoUrl,
+    gitRepo.gitRepoUrl,
     repoInfo.organizationId,
-    repoInfo.gitRoot
+    gitRepo.gitRoot
   )
   gitBlameCache = new GitBlameCache(
-    repoInfo.gitRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ''
+    gitRepo.gitRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ''
   )
   tracyController = new TracyController(
     gitBlameCache,
     aiBlameCache,
     statusBar,
-    repoInfo?.gitRepoUrl ?? ''
+    gitRepo.gitRepoUrl
   )
 
   // Register disposables for cleanup
