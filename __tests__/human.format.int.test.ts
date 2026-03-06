@@ -150,7 +150,7 @@ vi.mock('../src/human/config', () => ({
     segmentMaxChars: 10000,
     adjacencyGapLines: 1,
     maxSegmentDurationMs: 60000,
-    minSegmentCharsWithNoWhitespace: 30,
+    minSegmentCharsWithNoWhitespace: 28,
     uploadEnabled: false, // Set to false for DRY-RUN mode
     classifier: {
       largeSingleInsertThreshold: 10,

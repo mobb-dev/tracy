@@ -138,9 +138,19 @@ vi.mock('../src/mobbdev_src/commands/handleMobbLogin', () => ({
 }))
 
 // Mock GQLClient
-vi.mock('../src/mobbdev_src/features/analysis/graphql', () => ({
-  GQLClient: vi.fn().mockImplementation(() => createMockGQLClient()),
-}))
+vi.mock(
+  '../src/mobbdev_src/features/analysis/graphql',
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import('../src/mobbdev_src/features/analysis/graphql')
+      >()
+    return {
+      ...actual,
+      GQLClient: vi.fn().mockImplementation(() => createMockGQLClient()),
+    }
+  }
+)
 
 // Mock gqlClientFactory
 vi.mock('../src/shared/gqlClientFactory', () => ({

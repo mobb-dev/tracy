@@ -153,8 +153,8 @@ export class CursorTabMonitor extends BaseMonitor {
       return
     }
 
-    if (additions.length < 30) {
-      logger.info(`Cursor tab additions are smaller than 30. Ignore tracking`)
+    if (additions.length < 28) {
+      logger.info(`Cursor tab additions are smaller than 28. Ignore tracking`)
       return
     }
 

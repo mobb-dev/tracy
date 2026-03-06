@@ -112,11 +112,11 @@ beforeEach(() => {
 
 describe('HumanRecorder integration (current implementation)', () => {
   it('uploads immediately when uploadEnabled=true and above non-whitespace threshold', async () => {
-    // Long line to exceed the default non-whitespace threshold (30 chars).
+    // Long line to exceed the default non-whitespace threshold (28 chars).
     const text = 'abcdefghijklmnopqrstuvwxyz1234567890\n'
     const recorder = new HumanRecorder({
       uploadEnabled: true,
-      minSegmentCharsWithNoWhitespace: 30,
+      minSegmentCharsWithNoWhitespace: 28,
       appType: AppType.VSCODE,
     })
     const seg = makeSegment(text)
@@ -142,7 +142,7 @@ describe('HumanRecorder integration (current implementation)', () => {
     const text = 'const a = 1;\nconst b = 2;\n'
     const recorder = new HumanRecorder({
       uploadEnabled: false,
-      minSegmentCharsWithNoWhitespace: 30,
+      minSegmentCharsWithNoWhitespace: 28,
       appType: AppType.VSCODE,
     })
     const seg = makeSegment(text)

@@ -10,7 +10,7 @@ export const HUMAN_TRACKING_CONFIG = {
   maxSegmentDurationMs: 60000, // Max time between edits in a segment before it is force-closed
 
   // Upload behavior
-  minSegmentCharsWithNoWhitespace: 30, // Min non-whitespace chars per segment to upload
+  minSegmentCharsWithNoWhitespace: 28, // Min non-whitespace chars per segment to upload
   uploadEnabled: true, // Whether to actually upload (vs dry-run logging only)
 
   // Classifier thresholds (heuristics on a closed segment)
