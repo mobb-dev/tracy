@@ -41,7 +41,6 @@ export type TracyRecord = {
   computerName?: string
   userName?: string
   blameType?: string
-  rawData?: string
   rawDataS3Key?: string
   editType?: string
   filePath?: string
@@ -129,7 +128,7 @@ export class MockUploadServer {
         'UploadAIBlameInferencesInit', // Note: PascalCase!
         'FinalizeAIBlameInferencesUpload', // Note: PascalCase!
         'UploadTracyRecords',
-        'GetTracyRawDataUploadUrls',
+        'GetTracyRawDataUploadUrl',
       ]
       if (!knownOperations.includes(operationName)) {
         log(`  [Mock] ⚠️  UNKNOWN OPERATION: ${operationName}`)
@@ -269,19 +268,15 @@ export class MockUploadServer {
             },
           },
         })
-      } else if (operationName === 'GetTracyRawDataUploadUrls') {
-        const recordIds = (variables.recordIds || []) as string[]
+      } else if (operationName === 'GetTracyRawDataUploadUrl') {
         res.json({
           data: {
-            getTracyRawDataUploadUrls: {
+            getTracyRawDataUploadUrl: {
               status: 'OK',
               error: null,
-              uploads: recordIds.map((recordId: string) => ({
-                recordId,
-                url: `http://localhost:${this.port}/mock-s3-upload`,
-                uploadFieldsJSON: '{}',
-                uploadKey: `tracy-raw-data/test-user/${recordId}`,
-              })),
+              url: `http://localhost:${this.port}/mock-s3-upload`,
+              uploadFieldsJSON: '{}',
+              keyPrefix: 'tracy-uploads/mock/test-user/agent-events/',
             },
           },
         })
