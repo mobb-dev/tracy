@@ -1,6 +1,7 @@
 import * as os from 'os'
 
 import { PromptItemArray } from '../../mobbdev_src/args/commands/upload_ai_blame'
+import { logger } from '../../shared/logger'
 
 // Minimal JSON types to represent arbitrary JSON values (no `any` usage)
 export type JsonValue =
@@ -454,24 +455,42 @@ export class ChatMLSuccess {
     for (const c of message.content ?? []) {
       if (c.type === 2 && c.value?.type === 'thinking') {
         const thinkingText = c.value.thinking?.text
-        if (thinkingText?.trim()) {
+        if (typeof thinkingText === 'string' && thinkingText.trim()) {
           result.push({
             type: 'AI_THINKING',
             text: thinkingText,
             date: new Date(),
           })
+        } else if (typeof thinkingText !== 'string') {
+          // print error in case of unexpected format to help debugging
+          logger.warn(
+            {
+              thinking: c.value.thinking,
+              thinkingType: typeof c.value.thinking,
+            },
+            'Unexpected thinking content format, expected text field'
+          )
         }
       }
     }
 
     // Extract AI_RESPONSE from content type 1
     for (const c of message.content ?? []) {
-      if (c.type === 1 && c.text) {
+      if (c.type === 1 && typeof c.text === 'string' && c.text.trim()) {
         result.push({
           type: 'AI_RESPONSE',
           text: c.text,
           date: new Date(),
         })
+      } else if (c.type === 1 && typeof c.text !== 'string') {
+        // print error in case of unexpected format to help debugging
+        logger.warn(
+          {
+            text: c.text,
+            textType: typeof c.text,
+          },
+          'Unexpected AI response content format, expected text field'
+        )
       }
     }
 

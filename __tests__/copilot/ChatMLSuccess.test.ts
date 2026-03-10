@@ -1,8 +1,19 @@
 import * as fs from 'node:fs'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { ChatMLSuccess } from '../../src/copilot/events'
+
+vi.mock('vscode', () => ({}))
+
+vi.mock('../../src/shared/logger', () => ({
+  logger: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}))
 
 describe('ChatMLSuccess tests', () => {
   it('getPromptData extracts user prompts, AI responses, and tool executions', () => {

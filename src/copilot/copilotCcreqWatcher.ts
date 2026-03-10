@@ -226,7 +226,7 @@ export class CopilotCcreqWatcher {
       const evt = ChatMLSuccess.fromJson(obj)
       await this.opt.onChatMLSuccess?.(evt)
     } catch (err) {
-      logger.warn({ err }, 'Failed to parse ChatMLSuccess')
+      logger.error({ err }, 'Failed to parse ChatMLSuccess')
     }
   }
 
