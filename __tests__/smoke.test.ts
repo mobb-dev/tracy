@@ -47,7 +47,7 @@ vi.mock(
 
 // Mock handleMobbLogin
 vi.mock('../src/mobbdev_src/commands', () => ({
-  handleMobbLogin: vi.fn(async ({ inGqlClient }) => inGqlClient),
+  handleMobbLogin: vi.fn(async ({ authManager }) => authManager.getGQLClient()),
 }))
 
 vi.mock('vscode', () => {

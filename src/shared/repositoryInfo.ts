@@ -441,6 +441,9 @@ export async function getWorkspaceGitRepositories(
       }
     }
 
+    // Sort longest gitRoot first so nested repos (submodules) are matched before
+    // their parent when iterating with Array.find().
+    results.sort((a, b) => b.gitRoot.length - a.gitRoot.length)
     return results
   } catch (error) {
     logger.error({ error }, 'Failed to get workspace git repositories')

@@ -19,18 +19,14 @@ import { dailyMcpDetection } from './shared/DailyMcpDetection'
 import { flushLogger, initLogger, logger } from './shared/logger'
 import { MonitorManager } from './shared/MonitorManager'
 import { AppType, initRepoInfo, repoInfo } from './shared/repositoryInfo'
-import { AIBlameCache } from './ui/AIBlameCache'
-import { GitBlameCache } from './ui/GitBlameCache'
-import { TracyController } from './ui/TracyController'
+import { TracyCoordinator } from './ui/TracyCoordinator'
 import { StatusBarView } from './ui/TracyStatusBar'
 
 let monitorManager: MonitorManager | null = null
 
-let aiBlameCache: AIBlameCache | null = null
-let gitBlameCache: GitBlameCache | null = null
-let tracyController: TracyController | null = null
 let statusBarItem: vscode.StatusBarItem | null = null
 let statusBar: StatusBarView | null = null
+let coordinator: TracyCoordinator | null = null
 let authManager: AuthManager | null = null
 
 export async function activate(context: vscode.ExtensionContext) {
@@ -139,39 +135,17 @@ function setupView(context: vscode.ExtensionContext): void {
     return
   }
 
-  // View/blame features currently operate on a single repo. In multi-repo
-  // workspaces, use the first repository; full multi-repo view support is planned.
-  if (repoInfo.repositories.length > 1) {
-    logger.info(
-      `Multi-repo workspace: view setup using primary repo (${repoInfo.repositories[0].gitRoot})`
-    )
-  }
-
-  const gitRepo = repoInfo.repositories[0]
-
   if (!statusBar) {
     logger.error('Status bar is not available for view setup')
     return
   }
-  aiBlameCache = new AIBlameCache(
-    gitRepo.gitRepoUrl,
-    repoInfo.organizationId,
-    gitRepo.gitRoot
-  )
-  gitBlameCache = new GitBlameCache(
-    gitRepo.gitRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ''
-  )
-  tracyController = new TracyController(
-    gitBlameCache,
-    aiBlameCache,
-    statusBar,
-    gitRepo.gitRepoUrl
-  )
 
-  // Register disposables for cleanup
-  context.subscriptions.push({ dispose: () => tracyController?.dispose() })
-  context.subscriptions.push({ dispose: () => aiBlameCache?.dispose() })
-  context.subscriptions.push({ dispose: () => gitBlameCache?.dispose() })
+  coordinator = new TracyCoordinator(
+    repoInfo.repositories,
+    repoInfo.organizationId,
+    statusBar
+  )
+  context.subscriptions.push({ dispose: () => coordinator?.dispose() })
 }
 
 async function getAuthenticated(
@@ -223,14 +197,15 @@ async function getAuthenticated(
     // generates login URL, opens browser, waits for authentication
     try {
       await handleMobbLogin({
-        inGqlClient: authManager.getGQLClient(),
         skipPrompts: true,
         apiUrl,
         webAppUrl,
+        authManager,
       })
       logger.info('User authenticated successfully')
       if (statusBar) {
         statusBar.clearAuthPending()
+        coordinator?.refreshActiveEditor()
       }
     } catch (err) {
       logger.error({ err }, 'Authentication flow failed')

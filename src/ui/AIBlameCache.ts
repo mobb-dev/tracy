@@ -85,8 +85,12 @@ function mapAttributions(
   }))
 }
 
+// commitSha -> repo-relative filePath -> lineNumber -> attribution
+type FileAttributionIndex = Map<number, AIBlameAttribution>
+type CommitAttributionIndex = Map<string, FileAttributionIndex>
+
 export class AIBlameCache {
-  private attributionCache = new Map<string, AIBlameAttributionList>()
+  private attributionCache = new Map<string, CommitAttributionIndex>()
   private promptCache = new Map<string, string>()
   private promptSummaryCache = new Map<string, PromptSummary>()
   private pending: Record<string, Promise<AIBlameAttributionList | null>> = {}
@@ -102,66 +106,47 @@ export class AIBlameCache {
     }
   }
 
-  private matchesFilePath(
-    filePath: string,
-    attributionFilePath: string
-  ): boolean {
-    // Normalize Windows paths to POSIX-style separators for comparison.
-    const full = filePath.replace(/\\/g, '/')
-    const suffix = attributionFilePath.replace(/\\/g, '/')
-
-    if (full === suffix) {
-      return true
+  // Strips gitRoot prefix and normalizes separators to produce a repo-relative
+  // POSIX path that matches what the server stores in attribution.filePath.
+  // Falls back to a plain POSIX-normalized path when gitRoot is unavailable.
+  private toRepoRelativePath(filePath: string): string {
+    const posix = filePath.replace(/\\/g, '/')
+    if (!this.gitRoot) {
+      return posix
     }
-
-    // Ensure the suffix matches a full path segment boundary.
-    // Example: suffix "test.ts" should match "/repo/test.ts" but not "/repo/mytest.ts".
-    const idx = full.lastIndexOf(suffix)
-    if (idx === -1) {
-      return false
+    const root = this.gitRoot.replace(/\\/g, '/').replace(/\/$/, '')
+    if (posix.startsWith(`${root}/`)) {
+      return posix.slice(root.length + 1)
     }
-    if (idx + suffix.length !== full.length) {
-      return false
-    }
-    if (idx === 0) {
-      return true
-    }
-    return full[idx - 1] === '/'
+    return posix
   }
 
-  async getAIBlameInfoLine(
-    commitSha: string,
-    filePath: string,
-    lineNumber: number
-  ): Promise<AIBlameAttribution | null> {
-    const aiBlameInfo = await this.getAIBlameInfo(commitSha)
-    if (aiBlameInfo) {
-      for (const attr of aiBlameInfo) {
-        if (attr.lineNumber === lineNumber) {
-          if (this.matchesFilePath(filePath, attr.filePath)) {
-            return attr
-          }
-        }
+  private buildCommitAttributionIndex(
+    attributions: AIBlameAttributionList
+  ): CommitAttributionIndex {
+    const index = new Map<string, FileAttributionIndex>()
+    for (const attr of attributions) {
+      const normalizedPath = attr.filePath.replace(/\\/g, '/')
+      let fileIndex = index.get(normalizedPath)
+      if (!fileIndex) {
+        fileIndex = new Map()
+        index.set(normalizedPath, fileIndex)
       }
+      fileIndex.set(attr.lineNumber, attr)
     }
-    return null
+    return index
   }
 
-  async getAIBlameInfo(
-    commitSha: string
-  ): Promise<AIBlameAttributionList | null> {
-    // 1. Return from cache if present
+  private async ensureCommitLoaded(commitSha: string): Promise<void> {
     if (this.attributionCache.has(commitSha)) {
-      return this.attributionCache.get(commitSha)!
+      return
     }
 
-    // 2. If we already have an in-flight request, just await it
     if (commitSha in this.pending) {
-      return this.pending[commitSha]
+      await this.pending[commitSha]
+      return
     }
 
-    // 3. Start new analysis with error handling built into the Promise
-    // This ensures both first and concurrent callers get consistent error behavior
     const promise = (async (): Promise<AIBlameAttributionList | null> => {
       try {
         const result = await this.analyzeCommit(commitSha)
@@ -169,7 +154,7 @@ export class AIBlameCache {
           this.setCached(
             this.attributionCache,
             commitSha,
-            result,
+            this.buildCommitAttributionIndex(result),
             MAX_ATTRIBUTION_CACHE_SIZE
           )
         }
@@ -186,7 +171,26 @@ export class AIBlameCache {
     })()
 
     this.pending[commitSha] = promise
-    return promise
+    await promise
+  }
+
+  async getAIBlameInfoLine(
+    commitSha: string,
+    filePath: string,
+    lineNumber: number
+  ): Promise<AIBlameAttribution | null> {
+    // Trigger data loading (handles caching, pending dedup, and error handling)
+    await this.ensureCommitLoaded(commitSha)
+
+    const commitIndex = this.attributionCache.get(commitSha)
+    if (!commitIndex) {
+      return null
+    }
+
+    // Strip gitRoot to get a repo-relative path that matches server-stored paths,
+    // enabling a direct O(1) map lookup instead of suffix-matching iteration.
+    const relPath = this.toRepoRelativePath(filePath)
+    return commitIndex.get(relPath)?.get(lineNumber) ?? null
   }
 
   async getAIBlamePrompt(attributionId: string): Promise<string | null> {

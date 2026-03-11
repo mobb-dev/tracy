@@ -5,6 +5,31 @@ import type {
   RepositoryInfo,
 } from '../src/shared/repositoryInfo'
 
+// Mock dependencies that can cause timeouts
+vi.mock('../src/mobbdev_src/features/analysis/scm/services/GitService', () => ({
+  GitService: vi.fn().mockImplementation(() => ({
+    isGitRepository: vi.fn().mockResolvedValue(false),
+    getGitRoot: vi.fn().mockResolvedValue(''),
+    getRemoteUrl: vi.fn().mockResolvedValue(''),
+  })),
+}))
+
+vi.mock('../src/shared/gqlClientFactory', () => ({
+  createGQLClient: vi.fn().mockResolvedValue({
+    getLastOrg: vi.fn().mockResolvedValue({ organizationId: 'test-org' }),
+    getUserInfo: vi.fn().mockResolvedValue({ email: 'test@test.com' }),
+  }),
+}))
+
+vi.mock('../src/shared/logger', () => ({
+  logger: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}))
+
 const makeRepoInfo = (repos: GitRepository[]): RepositoryInfo => ({
   repositories: repos,
   userEmail: 'test@test.com',

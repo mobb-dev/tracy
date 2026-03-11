@@ -208,4 +208,115 @@ describe('TracyController', () => {
       )
     })
   })
+
+  describe('isFileInRepo', () => {
+    it('returns true for every file when gitRoot is empty (legacy single-repo mode)', async () => {
+      const { TracyController } = await import('../src/ui/TracyController')
+      const controller = new TracyController(
+        {} as any,
+        {} as any,
+        {} as any,
+        'repo-url',
+        ''
+      )
+      expect(controller.isFileInRepo('/any/path/file.ts')).toBe(true)
+      expect(controller.isFileInRepo('/completely/different/path.ts')).toBe(
+        true
+      )
+    })
+
+    it('returns true for an exact gitRoot match', async () => {
+      const { TracyController } = await import('../src/ui/TracyController')
+      const controller = new TracyController(
+        {} as any,
+        {} as any,
+        {} as any,
+        'repo-url',
+        '/workspace/my-repo'
+      )
+      expect(controller.isFileInRepo('/workspace/my-repo')).toBe(true)
+    })
+
+    it('returns true for a file inside the repo', async () => {
+      const { TracyController } = await import('../src/ui/TracyController')
+      const controller = new TracyController(
+        {} as any,
+        {} as any,
+        {} as any,
+        'repo-url',
+        '/workspace/my-repo'
+      )
+      expect(controller.isFileInRepo('/workspace/my-repo/src/index.ts')).toBe(
+        true
+      )
+      expect(
+        controller.isFileInRepo('/workspace/my-repo/nested/deep/file.ts')
+      ).toBe(true)
+    })
+
+    it('returns false for a file in a sibling directory', async () => {
+      const { TracyController } = await import('../src/ui/TracyController')
+      const controller = new TracyController(
+        {} as any,
+        {} as any,
+        {} as any,
+        'repo-url',
+        '/workspace/my-repo'
+      )
+      expect(
+        controller.isFileInRepo('/workspace/other-repo/src/index.ts')
+      ).toBe(false)
+    })
+
+    it('does not match a directory that only shares a name prefix', async () => {
+      const { TracyController } = await import('../src/ui/TracyController')
+      // gitRoot = /workspace/proj, file is under /workspace/project — must not match
+      const controller = new TracyController(
+        {} as any,
+        {} as any,
+        {} as any,
+        'repo-url',
+        '/workspace/proj'
+      )
+      expect(controller.isFileInRepo('/workspace/project/src/index.ts')).toBe(
+        false
+      )
+    })
+  })
+
+  describe('invalidate', () => {
+    it('bumps the internal version counter to mark in-flight work as stale', async () => {
+      const { TracyController } = await import('../src/ui/TracyController')
+      const controller = new TracyController(
+        {} as any,
+        {} as any,
+        {} as any,
+        'repo-url',
+        ''
+      )
+
+      const versionBefore = (controller as any).statusBarState.version
+      controller.invalidate()
+      const versionAfter = (controller as any).statusBarState.version
+
+      expect(versionAfter).toBe(versionBefore + 1)
+    })
+
+    it('increments the version on each successive call', async () => {
+      const { TracyController } = await import('../src/ui/TracyController')
+      const controller = new TracyController(
+        {} as any,
+        {} as any,
+        {} as any,
+        'repo-url',
+        ''
+      )
+
+      controller.invalidate()
+      controller.invalidate()
+      controller.invalidate()
+
+      expect((controller as any).statusBarState.version).toBe(3)
+    })
+  })
 })

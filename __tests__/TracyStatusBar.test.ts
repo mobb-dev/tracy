@@ -210,7 +210,7 @@ describe('TracyStatusBar', () => {
 
       new StatusBarView(mockStatusBarItem as any)
 
-      expect(mockStatusBarItem.text).toBe('Tracy: $(error)')
+      expect(mockStatusBarItem.text).toBe('Tracy: $(sync~spin)')
       expect(mockStatusBarItem.command).toBe('mobb-ai-tracer.showInfoPanel')
       expect(mockStatusBarItem.show).toHaveBeenCalled()
     })
@@ -285,7 +285,7 @@ describe('TracyStatusBar dev mode detection', () => {
 
     new StatusBarView(mockStatusBarItem as any)
 
-    expect(mockStatusBarItem.text).toBe('Tracy (DEV): $(error)')
+    expect(mockStatusBarItem.text).toBe('Tracy (DEV): $(sync~spin)')
     expect(mockStatusBarItem.command).toBe('mobb-ai-tracer-dev.showInfoPanel')
   })
 })

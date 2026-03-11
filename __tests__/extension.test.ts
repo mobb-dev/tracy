@@ -61,6 +61,7 @@ vi.mock('vscode', () => {
       })),
       showInformationMessage: vi.fn(),
       onDidChangeActiveTextEditor: vi.fn(() => ({ dispose: vi.fn() })),
+      onDidChangeTextEditorSelection: vi.fn(() => ({ dispose: vi.fn() })),
       activeTextEditor: undefined,
     },
     StatusBarAlignment: {
@@ -159,7 +160,7 @@ vi.mock('../src/shared/gqlClientFactory', () => ({
 
 // Mock handleMobbLogin
 vi.mock('../src/mobbdev_src/commands', () => ({
-  handleMobbLogin: vi.fn(async ({ inGqlClient }) => inGqlClient),
+  handleMobbLogin: vi.fn(async ({ authManager }) => authManager.getGQLClient()),
 }))
 
 // Mock the startupTimestamp to a fixed date for testing

@@ -33,10 +33,20 @@ export class GitBlameCache {
   private setupGitHeadListener(): void {
     const gitExt = vscode.extensions.getExtension('vscode.git')?.exports
     const git = gitExt?.getAPI(1)
-    const repo = git?.repositories?.[0]
+    const repo = (
+      git?.repositories as
+        | {
+            rootUri: vscode.Uri
+            state: {
+              HEAD?: { commit?: string }
+              onDidChange: (cb: () => void) => vscode.Disposable
+            }
+          }[]
+        | undefined
+    )?.find((r) => r.rootUri.fsPath === this.repoPath)
     if (!repo) {
       logger.warn(
-        'GitBlameCache: No git repository found, HEAD listener not set up.'
+        `GitBlameCache: No git repository found for ${this.repoPath}, HEAD listener not set up.`
       )
       return
     }

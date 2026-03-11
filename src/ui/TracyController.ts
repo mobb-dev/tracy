@@ -1,6 +1,6 @@
+import * as path from 'path'
 import * as vscode from 'vscode'
 
-import { EXTENSION_NAME } from '../env'
 import { BlameLineInfo } from '../mobbdev_src/utils/blame/gitBlameUtils'
 import { logger } from '../shared/logger'
 import { AIBlameAttribution, AIBlameCache } from './AIBlameCache'
@@ -77,16 +77,13 @@ export class TracyController {
     private gitCache: GitBlameCache,
     private aiBlameCache: AIBlameCache,
     private view: IView,
-    private repoUrl: string = ''
+    private repoUrl: string = '',
+    private gitRoot: string = ''
   ) {
-    this.setupEventListeners()
-
-    // Register VS Code command
-    const disposable = vscode.commands.registerCommand(
-      `${EXTENSION_NAME}.showInfoPanel`,
-      () => void this.showInfoPanel()
+    this.disposables.push(
+      { dispose: () => this.gitCache.dispose() },
+      { dispose: () => this.aiBlameCache.dispose() }
     )
-    this.disposables.push(disposable)
   }
 
   // Pure data loading functions (no UI side effects)
@@ -116,12 +113,14 @@ export class TracyController {
         !gitBlameInfo.commit ||
         gitBlameInfo.commit === UNCOMMITTED_SHA
       ) {
+        logger.warn(
+          `No git blame info for ${document.fileName} line ${lineNumber}`
+        )
         return {
           success: false,
           error: 'no_blame_info',
         }
       }
-
       return {
         success: true,
         gitBlameInfo,
@@ -443,25 +442,21 @@ export class TracyController {
     }
   }
 
-  private setupEventListeners(): void {
-    // Listen to selection changes
-    this.disposables.push(
-      vscode.window.onDidChangeTextEditorSelection(
-        this.onSelectionChange.bind(this)
-      )
-    )
-
-    // Listen to active editor changes
-    this.disposables.push(
-      vscode.window.onDidChangeActiveTextEditor(
-        this.onActiveEditorChange.bind(this)
-      )
-    )
-
-    // Initial update if there's an active editor
-    if (vscode.window.activeTextEditor) {
-      this.onActiveEditorChange(vscode.window.activeTextEditor)
+  /**
+   * Returns true when `filePath` is inside this controller's git repository.
+   * If no gitRoot was provided (single-repo legacy mode) every file is accepted.
+   */
+  public isFileInRepo(filePath: string): boolean {
+    if (!this.gitRoot) {
+      return true
     }
+    // Normalize separators so the check works on Windows too.
+    const normalizedFile = filePath.split(path.sep).join('/')
+    const normalizedRoot = this.gitRoot.split(path.sep).join('/')
+    return (
+      normalizedFile === normalizedRoot ||
+      normalizedFile.startsWith(`${normalizedRoot}/`)
+    )
   }
 
   private isValidFile(document: vscode.TextDocument): boolean {
@@ -493,7 +488,7 @@ export class TracyController {
     return true
   }
 
-  private async onActiveEditorChange(
+  public async handleEditorChange(
     editor: vscode.TextEditor | undefined
   ): Promise<void> {
     if (!editor) {
@@ -519,7 +514,7 @@ export class TracyController {
     await this.handleLineChange(doc, lineNumber)
   }
 
-  private onSelectionChange(
+  public handleSelectionChange(
     event: vscode.TextEditorSelectionChangeEvent
   ): void {
     if (!event.textEditor || event.selections.length === 0) {
@@ -555,6 +550,14 @@ export class TracyController {
       logger.debug(`Selection changed: ${doc.uri.fsPath} at line ${lineNumber}`)
       void this.handleLineChange(doc, lineNumber)
     }, 150)
+  }
+
+  /**
+   * Bump the internal version counter to cancel any in-flight async blame work.
+   * Called by TracyCoordinator when routing away from this controller.
+   */
+  public invalidate(): void {
+    this.updateStatusBarState({}, true)
   }
 
   public async showInfoPanel(): Promise<void> {

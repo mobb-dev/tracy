@@ -4,7 +4,9 @@ import { StatusBarItem } from 'vscode'
 import { EXTENSION_NAME } from '../env'
 
 export enum LineState {
+  INITIALIZING = 'initializing',
   NO_FILE_SELECTED_ERROR = 'no-file-selected-error',
+  OUTSIDE_REPO = 'outside-repo',
   LOADING = 'loading',
   AI = 'ai',
   HUMAN = 'human',
@@ -50,7 +52,7 @@ export class StatusBarView implements IView {
   constructor(private statusBarItem: StatusBarItem) {
     this.statusBarItem.text = STATUS_PREFIX
     this.statusBarItem.command = `${EXTENSION_NAME}.showInfoPanel`
-    this.refresh(LineState.NO_FILE_SELECTED_ERROR)
+    this.refresh(LineState.INITIALIZING)
   }
   refresh(state: LineState): void {
     // Don't allow refresh to override auth pending state
@@ -60,10 +62,19 @@ export class StatusBarView implements IView {
 
     let markdown: string = ''
     switch (state) {
+      case LineState.INITIALIZING:
+        this.statusBarItem.text = `${STATUS_PREFIX}$(sync~spin)`
+        markdown = 'Initializing Mobb Tracy'
+        break
       case LineState.NO_FILE_SELECTED_ERROR:
         this.statusBarItem.text = `${STATUS_PREFIX}$(error)`
         markdown =
           'No file selected. Please open a file to get AI attribution data.'
+        break
+      case LineState.OUTSIDE_REPO:
+        this.statusBarItem.text = `${STATUS_PREFIX}$(info)`
+        markdown =
+          'This file is outside all tracked repositories. AI attribution is only available for files inside a git repository tracked by Mobb Tracy.'
         break
       case LineState.LOADING:
         this.statusBarItem.text = `${STATUS_PREFIX}$(loading~spin)`
@@ -155,7 +166,8 @@ export class StatusBarView implements IView {
     this.isAuthPending = false
     this.authPendingUrl = undefined
     this.statusBarItem.backgroundColor = undefined
-    this.refresh(LineState.NO_FILE_SELECTED_ERROR)
+    // Do not set a specific state here — the coordinator will re-evaluate
+    // the active editor and set the correct state.
   }
 
   private generateMarkdown(context: string | null): string {
