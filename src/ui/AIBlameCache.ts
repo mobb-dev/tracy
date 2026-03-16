@@ -228,16 +228,36 @@ export class AIBlameCache {
     }
 
     try {
-      const promptSummary = await GetAiBlamePromptSummary(attributionId)
-      if (promptSummary) {
-        this.setCached(
-          this.promptSummaryCache,
-          attributionId,
-          promptSummary,
-          MAX_PROMPT_CACHE_SIZE
-        )
-        return promptSummary
+      const MAX_RETRIES = 40
+      const RETRY_DELAY_MS = 3000
+
+      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        const result = await GetAiBlamePromptSummary(attributionId)
+
+        if (result === 'PROCESSING') {
+          // Summary is being generated, wait and retry
+          await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS))
+          continue
+        }
+
+        if (result) {
+          this.setCached(
+            this.promptSummaryCache,
+            attributionId,
+            result,
+            MAX_PROMPT_CACHE_SIZE
+          )
+          return result
+        }
+
+        return null
       }
+
+      logger.warn(
+        { attributionId },
+        `AIBlameCache: Prompt summary still processing after ${MAX_RETRIES} retries`
+      )
+      return null
     } catch (error) {
       logger.error(
         { error, attributionId },
@@ -245,7 +265,6 @@ export class AIBlameCache {
       )
       return null
     }
-    return null
   }
 
   // Set a value in the cache, evicting oldest entries if needed
@@ -601,7 +620,7 @@ export async function GetAiBlamePrompt(
 
 export async function GetAiBlamePromptSummary(
   attributionId: string
-): Promise<PromptSummary | null> {
+): Promise<PromptSummary | 'PROCESSING' | null> {
   try {
     const gqlClient = await createGQLClient()
     const variables: GetPromptSummaryQueryVariables = {
@@ -621,6 +640,10 @@ export async function GetAiBlamePromptSummary(
         `AIBlameCache: Error getting prompt summary ${attributionId}: ${response.error}`
       )
       return null
+    }
+
+    if (response.__typename === 'PromptSummaryProcessing') {
+      return 'PROCESSING'
     }
 
     if (response.__typename === 'PromptSummarySuccess') {
