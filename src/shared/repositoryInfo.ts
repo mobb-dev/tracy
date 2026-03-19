@@ -5,10 +5,7 @@ import { setTimeout } from 'node:timers/promises'
 import * as vscode from 'vscode'
 
 import { GitService } from '../mobbdev_src/features/analysis/scm/services/GitService'
-import {
-  parseScmURL,
-  ScmType,
-} from '../mobbdev_src/features/analysis/scm/shared/src/urlParser'
+import { parseScmURL } from '../mobbdev_src/features/analysis/scm/shared/src/urlParser'
 import { createGQLClient } from './gqlClientFactory'
 import { logger } from './logger'
 
@@ -485,7 +482,7 @@ function getAppBaseUrl(): string {
 
 /**
  * Gets the Git repository information for a given file path.
- * Exported for testing; prefer getNormalizedGitHubRepoUrl for production use.
+ * Exported for testing; prefer getNormalizedRepoUrl for production use.
  * @param filePath The file path to check
  * @returns The GitRepository if found, otherwise null
  */
@@ -524,13 +521,13 @@ export function getRelevantRepo(filePath?: string): GitRepository | null {
 }
 
 /**
- * Gets the normalized GitHub repository URL from the current workspace.
- * Returns null if not in a git repository or if not a GitHub repository.
- * Only GitHub URLs are supported; non-GitHub repos return null.
- * For multi-repo workspaces, returns the first GitHub repository found.
+ * Gets the normalized repository URL from the current workspace.
+ * Returns null if not in a git repository or if the URL is not a recognized SCM provider.
+ * Supports GitHub, GitLab, Azure DevOps, and Bitbucket repositories.
+ * For multi-repo workspaces, returns the repository matching the given filePath.
  * If no repo is found for the given filePath, triggers a rescan to detect newly added repositories.
  */
-export async function getNormalizedGitHubRepoUrl(
+export async function getNormalizedRepoUrl(
   filePath?: string
 ): Promise<string | null> {
   let repo = getRelevantRepo(filePath)
@@ -565,7 +562,7 @@ export async function getNormalizedGitHubRepoUrl(
   }
 
   const parsed = parseScmURL(repo.gitRepoUrl)
-  if (parsed?.scmType === ScmType.GitHub) {
+  if (parsed?.scmType && parsed.scmType !== 'Unknown') {
     return repo.gitRepoUrl
   }
 

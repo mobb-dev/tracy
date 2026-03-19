@@ -112,7 +112,7 @@ export const infoPanelTemplate = (
       }
 
       function openCommit(url) {
-        vscode.postMessage({ command: 'openCommitOnGitHub', url: url })
+        vscode.postMessage({ command: 'openCommitInBrowser', url: url })
       }
 
       function wireCollapsibles(root = document) {

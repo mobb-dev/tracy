@@ -8,7 +8,7 @@ import { AiBlameInferenceType } from '../mobbdev_src/features/analysis/scm/gener
 import { logInfo } from './circularLog'
 import { getConfig } from './config'
 import { logger } from './logger'
-import { getNormalizedGitHubRepoUrl } from './repositoryInfo'
+import { getNormalizedRepoUrl } from './repositoryInfo'
 
 export async function uploadCursorChanges(changes: ProcessedChange[]) {
   // Cache repo URL lookups within the batch to avoid repeated scans
@@ -21,7 +21,7 @@ export async function uploadCursorChanges(changes: ProcessedChange[]) {
     if (repoUrlCache.has(change.filePath)) {
       repositoryUrl = repoUrlCache.get(change.filePath) ?? null
     } else {
-      repositoryUrl = await getNormalizedGitHubRepoUrl(change.filePath)
+      repositoryUrl = await getNormalizedRepoUrl(change.filePath)
       repoUrlCache.set(change.filePath, repositoryUrl)
     }
     logger.debug(
@@ -134,7 +134,7 @@ export async function uploadCopilotChanges(
 
   try {
     const config = getConfig()
-    const repositoryUrl = await getNormalizedGitHubRepoUrl(filePath)
+    const repositoryUrl = await getNormalizedRepoUrl(filePath)
     logger.debug(
       { filePath, repositoryUrl, sessionId },
       'Copilot per-change repo resolution'

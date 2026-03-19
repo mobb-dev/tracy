@@ -6,7 +6,7 @@ import {
 import { AiBlameInferenceType } from '../mobbdev_src/features/analysis/scm/generates/client_generates'
 import { getConfig } from '../shared/config'
 import { logger } from '../shared/logger'
-import { AppType, getNormalizedGitHubRepoUrl } from '../shared/repositoryInfo'
+import { AppType, getNormalizedRepoUrl } from '../shared/repositoryInfo'
 import {
   type SegmentClassificationCode,
   TOOL_NAME_HUMAN_TYPING,
@@ -40,7 +40,7 @@ export async function uploadHumanChangesFromExtension(
 
   try {
     const config = getConfig()
-    const repositoryUrl = await getNormalizedGitHubRepoUrl(segment.uri)
+    const repositoryUrl = await getNormalizedRepoUrl(segment.uri)
     logger.info('Starting human changes upload to backend...', {
       apiUrl: config.apiUrl,
       webAppUrl: config.webAppUrl,

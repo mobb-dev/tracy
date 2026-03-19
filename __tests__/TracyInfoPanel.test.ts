@@ -269,7 +269,7 @@ describe('TracyInfoPanel', () => {
   })
 
   describe('webview message handling', () => {
-    it('handles openCommitOnGitHub message', async () => {
+    it('handles openCommitInBrowser message', async () => {
       const mockAIBlameCache = { getAIBlamePrompt: vi.fn() }
       const mockGetCtx = vi.fn(() => ({
         fileName: 'test.ts',
@@ -298,7 +298,7 @@ describe('TracyInfoPanel', () => {
 
       const testUrl = 'https://github.com/user/repo/commit/abc123'
       await messageHandler({
-        command: 'openCommitOnGitHub',
+        command: 'openCommitInBrowser',
         url: testUrl,
       })
 

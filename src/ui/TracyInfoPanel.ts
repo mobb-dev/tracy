@@ -327,13 +327,13 @@ export class InfoPanel implements vscode.Disposable {
   private async onMessage(
     message:
       | { command: 'continueConversation' }
-      | { command: 'openCommitOnGitHub'; url: string }
+      | { command: 'openCommitInBrowser'; url: string }
       | { command: string; [key: string]: unknown }
   ): Promise<void> {
     const ctx = this.getCtx()
     const { attribution } = ctx
     switch (message?.command) {
-      case 'openCommitOnGitHub': {
+      case 'openCommitInBrowser': {
         const { url } = message as { command: string; url: string }
         if (url) {
           await vscode.env.openExternal(vscode.Uri.parse(url))

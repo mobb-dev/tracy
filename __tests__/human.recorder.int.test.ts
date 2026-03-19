@@ -41,7 +41,7 @@ vi.mock('../src/shared/repositoryInfo', async (importOriginal) => {
     await importOriginal<typeof import('../src/shared/repositoryInfo')>()
   return {
     ...actual,
-    getNormalizedGitHubRepoUrl: vi
+    getNormalizedRepoUrl: vi
       .fn()
       .mockResolvedValue('https://github.com/test-org/test-repo'),
   }
