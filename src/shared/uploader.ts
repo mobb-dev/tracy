@@ -87,6 +87,7 @@ export async function uploadCursorChanges(changes: ProcessedChange[]) {
           apiUrl: config.apiUrl,
           webAppUrl: config.webAppUrl,
           repositoryUrl,
+          sanitize: config.sanitizeData,
         })
 
       logger.info('Upload completed successfully')
@@ -100,6 +101,7 @@ export async function uploadCursorChanges(changes: ProcessedChange[]) {
       logger.info(
         {
           event: 'cursor_upload_sanitization',
+          sanitizationEnabled: config.sanitizeData,
           timestamp: new Date().toISOString(),
           model: change.model,
           tool: 'Cursor',
@@ -111,8 +113,11 @@ export async function uploadCursorChanges(changes: ProcessedChange[]) {
           totalDetections:
             result.promptsCounts.detections.total +
             result.inferenceCounts.detections.total,
+          sanitizationDurationMs: result.sanitizationDurationMs,
         },
-        'Cursor upload sanitization metrics'
+        config.sanitizeData
+          ? 'Cursor upload sanitization metrics'
+          : 'Cursor upload (sanitization disabled)'
       )
     } catch (error) {
       logger.error({ error, change }, 'Failed to upload cursor changes')
@@ -156,6 +161,7 @@ export async function uploadCopilotChanges(
         apiUrl: config.apiUrl,
         webAppUrl: config.webAppUrl,
         repositoryUrl,
+        sanitize: config.sanitizeData,
       }
     )
     logInfo('Inference uploaded', {
@@ -168,6 +174,7 @@ export async function uploadCopilotChanges(
     logger.info(
       {
         event: 'copilot_upload_sanitization',
+        sanitizationEnabled: config.sanitizeData,
         timestamp: new Date().toISOString(),
         model,
         tool: 'Copilot',
@@ -180,8 +187,11 @@ export async function uploadCopilotChanges(
         totalDetections:
           result.promptsCounts.detections.total +
           result.inferenceCounts.detections.total,
+        sanitizationDurationMs: result.sanitizationDurationMs,
       },
-      'Copilot upload sanitization metrics'
+      config.sanitizeData
+        ? 'Copilot upload sanitization metrics'
+        : 'Copilot upload (sanitization disabled)'
     )
   } catch (error) {
     logger.error(

@@ -12,7 +12,6 @@ import {
   copyDbFile,
   readBubblesByKeys,
   readCompletedFileEditBubbles,
-  readRowsByLike,
 } from './helpers/testDbReader'
 
 /** Small delay to let async activation complete before copying target DB */
@@ -185,7 +184,6 @@ const uploadAiBlameHandlerFromExtensionSpy = vi
 // Track mock function calls
 const initDBMock = vi.fn().mockResolvedValue(undefined)
 const closeDBMock = vi.fn().mockResolvedValue(undefined)
-const getRowsByLikeMock = vi.fn()
 const getCompletedFileEditBubblesSinceMock = vi.fn()
 const getBubblesByKeysMock = vi.fn().mockResolvedValue([])
 
@@ -193,11 +191,10 @@ const getBubblesByKeysMock = vi.fn().mockResolvedValue([])
 vi.mock('../src/cursor/db', () => ({
   initDB: () => initDBMock(),
   closeDB: () => closeDBMock(),
-  getRowsByLike: (params: { key: string; value?: string; keyOnly?: boolean }) =>
-    getRowsByLikeMock(params),
   getCompletedFileEditBubblesSince: (sinceIso: string, limit: number) =>
     getCompletedFileEditBubblesSinceMock(sinceIso, limit),
   getBubblesByKeys: (keys: string[]) => getBubblesByKeysMock(keys),
+  releaseConnection: vi.fn().mockResolvedValue(undefined),
 }))
 
 // Mock repositoryInfo to return valid test data
@@ -273,6 +270,7 @@ vi.mock('../src/shared/config', () => ({
     apiUrl: 'https://api.mobb.ai/v1/graphql',
     webAppUrl: 'https://app.mobb.ai',
     isDevExtension: false,
+    sanitizeData: false,
   })),
   hasRelevantConfigurationChanged: vi.fn(() => false),
 }))
@@ -306,7 +304,6 @@ beforeEach(() => {
   resetProcessedBubbles()
   initDBMock.mockClear()
   closeDBMock.mockClear()
-  getRowsByLikeMock.mockClear()
   getCompletedFileEditBubblesSinceMock.mockClear()
   getBubblesByKeysMock.mockClear()
   uploadAiBlameHandlerFromExtensionSpy.mockClear()
@@ -367,10 +364,6 @@ describe('extension tests', () => {
       // Configure mocks to use test helper reading from real .vscdb files
       getCompletedFileEditBubblesSinceMock.mockImplementation(() =>
         Promise.resolve(readCompletedFileEditBubbles())
-      )
-      getRowsByLikeMock.mockImplementation(
-        (params: { key: string; value?: string; keyOnly?: boolean }) =>
-          Promise.resolve(readRowsByLike(params))
       )
       getBubblesByKeysMock.mockImplementation((keys: string[]) =>
         Promise.resolve(readBubblesByKeys(keys))

@@ -1,7 +1,7 @@
 {
   "name": "mobb-ai-tracer",
   "displayName": "Mobb Tracy",
-  "version": "0.2.68",
+  "version": "0.2.69",
   "repository": "https://github.com/mobb-dev/tracy",
   "publisher": "Mobb",
   "icon": "icon.png",
@@ -26,6 +26,11 @@
           "type": "string",
           "default": "https://app.mobb.ai",
           "description": "Web application URL for Mobb. Requires window reload to take effect."
+        },
+        "mobbAiTracer.sanitizeData": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable sanitization of sensitive data (PII, secrets) before uploading. May impact performance with large sessions."
         }
       }
     }

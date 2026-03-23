@@ -11,6 +11,7 @@ vi.mock('vscode', () => ({
         workspaceValue: undefined,
         globalValue: undefined,
       })),
+      get: vi.fn((_key: string, defaultValue: unknown) => defaultValue),
     })),
   },
 }))

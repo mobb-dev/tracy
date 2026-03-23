@@ -30,17 +30,25 @@ export class MonitorManager {
     ])
   }
 
-  async startMonitoring(): Promise<void> {
-    const monitor = this.monitors.get(this.currentAppType)
+  async startMonitoring(excludeNames?: string[]): Promise<void> {
+    const monitors = this.monitors.get(this.currentAppType)
 
-    if (!monitor) {
+    if (!monitors) {
       logger.warn(`No monitor available for app type: ${this.currentAppType}`)
       return
     }
 
+    const toStart = excludeNames
+      ? monitors.filter((m) => !excludeNames.includes(m.name))
+      : monitors
+
+    if (excludeNames && toStart.length < monitors.length) {
+      logger.info(`Skipping monitors: ${excludeNames.join(', ')} (excluded)`)
+    }
+
     try {
       await Promise.all(
-        monitor.map(async (monitor) => {
+        toStart.map(async (monitor) => {
           await monitor.start()
         })
       )

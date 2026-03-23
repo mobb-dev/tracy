@@ -14,9 +14,8 @@ vi.mock('vscode', () => {
 
 vi.mock('../src/cursor/db', () => {
   return {
-    getRowsByLike: vi.fn(),
-    getComposerContent: vi.fn(),
     getBubblesByKeys: vi.fn().mockResolvedValue([]),
+    releaseConnection: vi.fn().mockResolvedValue(undefined),
   }
 })
 
@@ -30,17 +29,42 @@ vi.mock('../src/shared/logger', () => {
   }
 })
 
-const getRowsByLike = vi.mocked(db.getRowsByLike)
-const getComposerContent = vi.mocked(db.getComposerContent)
 const getBubblesByKeys = vi.mocked(db.getBubblesByKeys)
+const releaseConnection = vi.mocked(db.releaseConnection)
 
 beforeEach(() => {
   resetProcessedBubbles()
-  getRowsByLike.mockReset()
-  getComposerContent.mockReset()
   getBubblesByKeys.mockReset()
+  releaseConnection.mockReset()
+  releaseConnection.mockResolvedValue(undefined)
   getBubblesByKeys.mockResolvedValue([])
 })
+
+/**
+ * Set up getBubblesByKeys mock to return different data based on key patterns.
+ * The processor calls getBubblesByKeys 3 times in order:
+ *  1. composerData:* keys → composers
+ *  2. bubbleId:* keys → conversations
+ *  3. composer.content.* keys → content (only if edit_file_v2)
+ */
+function setupPrefetchMock(options: {
+  composers?: db.DBRow[]
+  conversations?: db.DBRow[]
+  content?: db.DBRow[]
+}) {
+  getBubblesByKeys.mockImplementation(async (keys: string[]) => {
+    if (keys.length === 0) {
+      return []
+    }
+    if (keys[0].startsWith('composerData:')) {
+      return options.composers ?? []
+    }
+    if (keys[0].startsWith('bubbleId:')) {
+      return options.conversations ?? []
+    }
+    return options.content ?? []
+  })
+}
 
 // Helper to create a bubble row with value
 function createBubbleRow(
@@ -136,7 +160,9 @@ describe('processor tests', () => {
         '3001-01-01T12:00:00.000Z'
       )
 
-      getRowsByLike.mockResolvedValueOnce([createComposerRow('composerData:1')])
+      setupPrefetchMock({
+        composers: [createComposerRow('composerData:xxx')],
+      })
 
       const { changes } = await processBubbles(
         [bubbleRow],
@@ -161,7 +187,8 @@ describe('processor tests', () => {
       )
 
       expect(changes).toHaveLength(0)
-      expect(getRowsByLike).not.toHaveBeenCalled()
+      // No candidates → no prefetch → getBubblesByKeys not called
+      expect(getBubblesByKeys).not.toHaveBeenCalled()
     })
 
     it('skips same codeblockId on second process (deduplication)', async () => {
@@ -171,7 +198,9 @@ describe('processor tests', () => {
         '3001-01-01T12:00:00.000Z'
       )
 
-      getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
+      setupPrefetchMock({
+        composers: [createComposerRow('composerData:xxx')],
+      })
 
       // First call - should process
       const { changes: changes1 } = await processBubbles(
@@ -200,7 +229,12 @@ describe('processor tests', () => {
         '3001-01-01T12:01:00.000Z'
       )
 
-      getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
+      setupPrefetchMock({
+        composers: [
+          createComposerRow('composerData:aaa'),
+          createComposerRow('composerData:bbb'),
+        ],
+      })
 
       const { changes } = await processBubbles(
         [bubble1, bubble2],
@@ -229,15 +263,14 @@ describe('processor tests', () => {
       expect(changes1).toHaveLength(0)
 
       // Second call - should still skip (already marked as seen)
-      // This verifies the optimization: we don't re-check old bubbles
       const { changes: changes2 } = await processBubbles(
         [oldBubble],
         startupTimestamp
       )
       expect(changes2).toHaveLength(0)
 
-      // getRowsByLike should never have been called (we skip before querying)
-      expect(getRowsByLike).not.toHaveBeenCalled()
+      // getBubblesByKeys should never have been called (no candidates)
+      expect(getBubblesByKeys).not.toHaveBeenCalled()
     })
 
     it('processes bubbles created after startupTimestamp', async () => {
@@ -249,7 +282,9 @@ describe('processor tests', () => {
 
       const startupTimestamp = new Date('2024-06-01T00:00:00.000Z')
 
-      getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
+      setupPrefetchMock({
+        composers: [createComposerRow('composerData:xxx')],
+      })
 
       const { changes } = await processBubbles([newBubble], startupTimestamp)
       expect(changes).toHaveLength(1)
@@ -269,7 +304,9 @@ describe('processor tests', () => {
         '3001-01-01T12:01:00.000Z'
       )
 
-      getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
+      setupPrefetchMock({
+        composers: [createComposerRow('composerData:aaa')],
+      })
 
       const { changes, hasMore } = await processBubbles(
         [bubble1, bubble2],
@@ -338,8 +375,6 @@ describe('processor tests', () => {
         'running'
       )
 
-      getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
-
       const { changes } = await processBubbles(
         [runningBubble],
         new Date('2024-01-01')
@@ -353,7 +388,7 @@ describe('processor tests', () => {
       const bubbleTimestamp = new Date('2024-01-15T10:00:00Z')
 
       const mainBubble = {
-        key: 'bubbleId:main',
+        key: 'bubbleId:main:trigger',
         value: JSON.stringify({
           createdAt: bubbleTimestamp.toISOString(),
           toolFormerData: {
@@ -372,45 +407,44 @@ describe('processor tests', () => {
         }),
       }
 
-      // Composer data lookup (via getRowsByLike)
-      getRowsByLike.mockResolvedValueOnce([
-        {
-          key: 'composerData:main',
-          value: JSON.stringify({
-            fullConversationHeadersOnly: [
-              { bubbleId: 'bubble-before' },
-              { bubbleId: 'bubble-at' },
-              { bubbleId: 'bubble-after' },
-            ],
-            modelConfig: { modelName: 'Test model', maxModel: false },
-          }),
-        },
-      ])
-
-      // Conversation bubbles batch fetch (via getBubblesByKeys)
-      getBubblesByKeys.mockResolvedValueOnce([
-        {
-          key: 'bubbleId:main:bubble-before',
-          value: JSON.stringify({
-            createdAt: '2024-01-15T09:30:00Z',
-            text: 'Before timestamp',
-          }),
-        },
-        {
-          key: 'bubbleId:main:bubble-at',
-          value: JSON.stringify({
-            createdAt: bubbleTimestamp.toISOString(),
-            text: 'At timestamp',
-          }),
-        },
-        {
-          key: 'bubbleId:main:bubble-after',
-          value: JSON.stringify({
-            createdAt: '2024-01-15T10:30:00Z',
-            text: 'After timestamp',
-          }),
-        },
-      ])
+      setupPrefetchMock({
+        composers: [
+          {
+            key: 'composerData:main',
+            value: JSON.stringify({
+              fullConversationHeadersOnly: [
+                { bubbleId: 'bubble-before' },
+                { bubbleId: 'bubble-at' },
+                { bubbleId: 'bubble-after' },
+              ],
+              modelConfig: { modelName: 'Test model', maxModel: false },
+            }),
+          },
+        ],
+        conversations: [
+          {
+            key: 'bubbleId:main:bubble-before',
+            value: JSON.stringify({
+              createdAt: '2024-01-15T09:30:00Z',
+              text: 'Before timestamp',
+            }),
+          },
+          {
+            key: 'bubbleId:main:bubble-at',
+            value: JSON.stringify({
+              createdAt: bubbleTimestamp.toISOString(),
+              text: 'At timestamp',
+            }),
+          },
+          {
+            key: 'bubbleId:main:bubble-after',
+            value: JSON.stringify({
+              createdAt: '2024-01-15T10:30:00Z',
+              text: 'After timestamp',
+            }),
+          },
+        ],
+      })
 
       const { changes } = await processBubbles(
         [mainBubble],
@@ -451,7 +485,9 @@ describe('processor tests', () => {
         }),
       }
 
-      getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
+      setupPrefetchMock({
+        composers: [createComposerRow('composerData:xxx')],
+      })
 
       const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
@@ -483,7 +519,9 @@ describe('processor tests', () => {
         }),
       }
 
-      getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
+      setupPrefetchMock({
+        composers: [createComposerRow('composerData:xxx')],
+      })
 
       const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
@@ -523,8 +561,7 @@ describe('processor tests', () => {
         '3001-01-01T12:00:00.000Z'
       )
 
-      getRowsByLike.mockResolvedValue([]) // No composer data
-
+      // getBubblesByKeys returns [] by default → composer not found
       const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
       expect(changes).toHaveLength(0)
     })
@@ -536,15 +573,17 @@ describe('processor tests', () => {
         '3001-01-01T12:00:00.000Z'
       )
 
-      getRowsByLike.mockResolvedValue([
-        {
-          key: 'composerData:1',
-          value: JSON.stringify({
-            fullConversationHeadersOnly: [],
-            // No modelConfig
-          }),
-        },
-      ])
+      setupPrefetchMock({
+        composers: [
+          {
+            key: 'composerData:xxx',
+            value: JSON.stringify({
+              fullConversationHeadersOnly: [],
+              // No modelConfig
+            }),
+          },
+        ],
+      })
 
       const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
       expect(changes).toHaveLength(0)
@@ -788,7 +827,9 @@ describe('processor tests', () => {
         }),
       }
 
-      getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
+      setupPrefetchMock({
+        composers: [createComposerRow('composerData:xxx')],
+      })
 
       const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
@@ -819,13 +860,13 @@ describe('processor tests', () => {
         }),
       }
 
-      getComposerContent
-        .mockResolvedValueOnce('old content\n')
-        .mockResolvedValueOnce('old content\nnew line\n')
-
-      getRowsByLike.mockResolvedValueOnce([
-        createComposerRow('composerData:xxx'),
-      ])
+      setupPrefetchMock({
+        composers: [createComposerRow('composerData:xxx')],
+        content: [
+          { key: 'content-before', value: 'old content\n' },
+          { key: 'content-after', value: 'old content\nnew line\n' },
+        ],
+      })
 
       const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
@@ -840,7 +881,9 @@ describe('processor tests', () => {
         '3001-01-01T12:00:00.000Z'
       )
 
-      getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
+      setupPrefetchMock({
+        composers: [createComposerRow('composerData:xxx')],
+      })
 
       const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
@@ -858,25 +901,22 @@ describe('processor tests', () => {
         '3001-01-01T12:00:00.000Z'
       )
 
-      // Mock content lookup
-      getComposerContent
-        .mockResolvedValueOnce('line1\nline2\n') // before content
-        .mockResolvedValueOnce('line1\nline2\nline3 added\n') // after content
-
-      // Mock composer lookup
-      getRowsByLike.mockResolvedValueOnce([createComposerRow('composerData:1')])
+      setupPrefetchMock({
+        composers: [createComposerRow('composerData:xxx')],
+        content: [
+          { key: 'composer.content.before123', value: 'line1\nline2\n' },
+          {
+            key: 'composer.content.after456',
+            value: 'line1\nline2\nline3 added\n',
+          },
+        ],
+      })
 
       const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
       expect(changes).toHaveLength(1)
       expect(changes[0].additions).toBe('line3 added')
       expect(changes[0].model).toBe('Test model')
-      expect(getComposerContent).toHaveBeenCalledWith(
-        'composer.content.before123'
-      )
-      expect(getComposerContent).toHaveBeenCalledWith(
-        'composer.content.after456'
-      )
     })
 
     it('extracts multiple added lines from edit_file_v2', async () => {
@@ -887,14 +927,16 @@ describe('processor tests', () => {
         '3001-01-01T12:00:00.000Z'
       )
 
-      // Mock content lookup - before has 1 line, after has 4 lines
-      getComposerContent
-        .mockResolvedValueOnce('original line\n')
-        .mockResolvedValueOnce(
-          'original line\nnew line 1\nnew line 2\nnew line 3\n'
-        )
-
-      getRowsByLike.mockResolvedValueOnce([createComposerRow('composerData:1')])
+      setupPrefetchMock({
+        composers: [createComposerRow('composerData:xxx')],
+        content: [
+          { key: 'composer.content.before', value: 'original line\n' },
+          {
+            key: 'composer.content.after',
+            value: 'original line\nnew line 1\nnew line 2\nnew line 3\n',
+          },
+        ],
+      })
 
       const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
@@ -910,23 +952,33 @@ describe('processor tests', () => {
         '3001-01-01T12:00:00.000Z'
       )
 
-      // Mock content lookup - completely different content
-      getComposerContent
-        .mockResolvedValueOnce('old content\nold line 2\n')
-        .mockResolvedValueOnce('new content\nnew line 2\nnew line 3\n')
-
-      getRowsByLike.mockResolvedValueOnce([createComposerRow('composerData:1')])
+      setupPrefetchMock({
+        composers: [createComposerRow('composerData:xxx')],
+        content: [
+          {
+            key: 'composer.content.before',
+            value: 'old content\nold line 2\n',
+          },
+          {
+            key: 'composer.content.after',
+            value: 'new content\nnew line 2\nnew line 3\n',
+          },
+        ],
+      })
 
       const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
       expect(changes).toHaveLength(1)
-      // Should contain only additions (new content)
       expect(changes[0].additions).toContain('new content')
       expect(changes[0].additions).toContain('new line 2')
       expect(changes[0].additions).toContain('new line 3')
     })
 
-    it('skips edit_file_v2 when before content not found', async () => {
+    it('treats missing before content as empty string (new file scenario)', async () => {
+      // When beforeContentId is present but content is not found in prefetch,
+      // we treat it as an empty file (new file creation) rather than skipping.
+      // This differs from the old per-query behavior where a missing content
+      // lookup would cause the bubble to be skipped entirely.
       const bubble = createEditFileV2BubbleRow(
         'bubbleId:xxx:yyy',
         'composer.content.before',
@@ -934,14 +986,19 @@ describe('processor tests', () => {
         '3001-01-01T12:00:00.000Z'
       )
 
-      // Mock content lookup - before content not found
-      getComposerContent
-        .mockResolvedValueOnce(undefined)
-        .mockResolvedValueOnce('after content')
+      setupPrefetchMock({
+        composers: [createComposerRow('composerData:xxx')],
+        content: [
+          // Only after content is present — before content is missing from DB
+          { key: 'composer.content.after', value: 'line1\nline2\nline3\n' },
+        ],
+      })
 
       const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
-      expect(changes).toHaveLength(0)
+      // Bubble is processed (not skipped), entire after-content treated as additions
+      expect(changes).toHaveLength(1)
+      expect(changes[0].additions).toBe('line1\nline2\nline3')
     })
 
     it('skips edit_file_v2 when after content not found', async () => {
@@ -952,10 +1009,11 @@ describe('processor tests', () => {
         '3001-01-01T12:00:00.000Z'
       )
 
-      // Mock content lookup - after content not found
-      getComposerContent
-        .mockResolvedValueOnce('before content')
-        .mockResolvedValueOnce(undefined)
+      setupPrefetchMock({
+        composers: [createComposerRow('composerData:xxx')],
+        // No content returned → afterContent not found
+        content: [],
+      })
 
       const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
@@ -970,14 +1028,7 @@ describe('processor tests', () => {
         '3001-01-01T12:00:00.000Z'
       )
 
-      // Mock content lookup
-      getComposerContent
-        .mockResolvedValueOnce('before content')
-        .mockResolvedValueOnce('after content')
-
-      // Mock composer lookup - not found
-      getRowsByLike.mockResolvedValueOnce([])
-
+      // No composers returned
       const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
       expect(changes).toHaveLength(0)
@@ -994,18 +1045,13 @@ describe('processor tests', () => {
         toolCallId
       )
 
-      // Mock content lookup
-      getComposerContent
-        .mockResolvedValue('before content')
-        .mockResolvedValue('after content with additions')
-
-      getRowsByLike.mockResolvedValue([createComposerRow('composerData:1')])
-
-      // Reset mocks for each call to have fresh content
-      getComposerContent.mockReset()
-      getComposerContent
-        .mockResolvedValueOnce('before')
-        .mockResolvedValueOnce('after new line')
+      setupPrefetchMock({
+        composers: [createComposerRow('composerData:xxx')],
+        content: [
+          { key: 'composer.content.before', value: 'before' },
+          { key: 'composer.content.after', value: 'after new line' },
+        ],
+      })
 
       // First call - should process
       const { changes: changes1 } = await processBubbles(
@@ -1030,12 +1076,13 @@ describe('processor tests', () => {
         '3001-01-01T12:00:00.000Z'
       )
 
-      // Mock content lookup - empty before (new file)
-      getComposerContent
-        .mockResolvedValueOnce('')
-        .mockResolvedValueOnce('line1\nline2\nline3\n')
-
-      getRowsByLike.mockResolvedValueOnce([createComposerRow('composerData:1')])
+      setupPrefetchMock({
+        composers: [createComposerRow('composerData:xxx')],
+        content: [
+          { key: 'composer.content.before', value: '' },
+          { key: 'composer.content.after', value: 'line1\nline2\nline3\n' },
+        ],
+      })
 
       const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
@@ -1051,19 +1098,24 @@ describe('processor tests', () => {
         '3001-01-01T12:00:00.000Z'
       )
 
-      // Mock content lookup - modification in middle of file
-      getComposerContent
-        .mockResolvedValueOnce('function hello() {\n  console.log("old");\n}\n')
-        .mockResolvedValueOnce(
-          'function hello() {\n  console.log("new message");\n  console.log("extra line");\n}\n'
-        )
-
-      getRowsByLike.mockResolvedValueOnce([createComposerRow('composerData:1')])
+      setupPrefetchMock({
+        composers: [createComposerRow('composerData:xxx')],
+        content: [
+          {
+            key: 'composer.content.before',
+            value: 'function hello() {\n  console.log("old");\n}\n',
+          },
+          {
+            key: 'composer.content.after',
+            value:
+              'function hello() {\n  console.log("new message");\n  console.log("extra line");\n}\n',
+          },
+        ],
+      })
 
       const { changes } = await processBubbles([bubble], new Date('2024-01-01'))
 
       expect(changes).toHaveLength(1)
-      // Should contain the new/modified lines
       expect(changes[0].additions).toContain('console.log("new message")')
       expect(changes[0].additions).toContain('console.log("extra line")')
     })

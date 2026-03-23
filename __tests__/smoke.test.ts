@@ -110,8 +110,9 @@ vi.mock('vscode', () => {
 vi.mock('../src/cursor/db', () => ({
   initDB: vi.fn().mockResolvedValue(undefined),
   closeDB: vi.fn().mockResolvedValue(undefined),
-  getRowsByLike: vi.fn().mockResolvedValue([]),
   getCompletedFileEditBubblesSince: vi.fn().mockResolvedValue([]),
+  getBubblesByKeys: vi.fn().mockResolvedValue([]),
+  releaseConnection: vi.fn().mockResolvedValue(undefined),
 }))
 
 describe('copilot extension module', () => {

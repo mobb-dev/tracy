@@ -4,12 +4,7 @@ import { diffLines } from 'diff'
 
 import { AiBlameInferenceType } from '../mobbdev_src/features/analysis/scm/generates/client_generates'
 import { logger } from '../shared/logger'
-import {
-  DBRow,
-  getBubblesByKeys,
-  getComposerContent,
-  getRowsByLike,
-} from './db'
+import { DBRow, getBubblesByKeys, releaseConnection } from './db'
 
 // Track uploaded inferences by toolCallId
 // toolCallId exists for all completed tool calls (both accepted and rejected)
@@ -182,87 +177,28 @@ function trackToolCallId(id: string): void {
   uploadedToolCallIds.add(id)
 }
 
-export async function processBubbles(
-  rows: DBRow[],
-  startupTimestamp: Date,
-  batchLimit: number = Infinity
-): Promise<ProcessBubblesResult> {
-  const changes: ProcessedChange[] = []
-  let latestTimestamp: string | null = null
-  let processed = 0
-  // Once we encounter a non-completed row, freeze the watermark.
-  // Rows are ordered by createdAt ASC, so any completed row AFTER a
-  // non-completed one would advance the watermark past the pending row,
-  // causing it to be skipped on the next poll (data loss).
-  let watermarkFrozen = false
+// ── Types for prefetch-then-process pattern ──────────────────────────
 
-  // Per-poll cache: avoids re-querying the same composerData for multiple bubbles
-  // in the same composer (e.g. 10 bubbles in composer X = 1 query instead of 10)
-  const composerCache = new Map<string, ComposerData | null>()
+type BubbleCandidate = {
+  row: DBRow
+  bubbleData: BubbleData
+  composerId: string
+  toolCallId: string
+}
 
-  for (const row of rows) {
-    if (!row.value) {
-      continue
-    }
+/**
+ * Pre-fetched data maps. All DB reads are batched upfront so the connection
+ * can be released before CPU-heavy processing begins.
+ */
+type PrefetchedData = {
+  composers: Map<string, ComposerData | null>
+  conversations: Map<string, DBRow>
+  content: Map<string, string>
+}
 
-    // Quick pre-filter: check if this bubble has the required fields
-    try {
-      const bubbleData = JSON.parse(row.value) as unknown as BubbleData
-      const toolCallId = bubbleData.toolFormerData?.toolCallId
-      const status = bubbleData.toolFormerData?.status
-      const createdAt = new Date(bubbleData.createdAt)
-
-      // Only advance the high-water mark for completed rows, and only
-      // while we haven't seen any non-completed rows yet. This prevents
-      // the watermark from jumping past a "running" bubble that still
-      // needs to be re-fetched once it completes.
-      if (status !== 'completed') {
-        watermarkFrozen = true
-      } else if (
-        !watermarkFrozen &&
-        (!latestTimestamp || bubbleData.createdAt > latestTimestamp)
-      ) {
-        latestTimestamp = bubbleData.createdAt
-      }
-
-      // Skip bubbles without toolCallId or not completed
-      if (!toolCallId || status !== 'completed') {
-        continue
-      }
-
-      // Skip already uploaded toolCallIds
-      if (uploadedToolCallIds.has(toolCallId)) {
-        continue
-      }
-
-      // Skip old bubbles (created before extension startup) and mark as seen
-      // so we don't re-check them on every poll
-      if (createdAt < startupTimestamp) {
-        trackToolCallId(toolCallId)
-        continue
-      }
-
-      // Check batch limit before processing
-      if (processed >= batchLimit) {
-        return { changes, latestTimestamp, hasMore: true }
-      }
-
-      const change = await processBubble(row, bubbleData, composerCache)
-
-      // Always mark as seen to avoid infinite retries, even if processing fails
-      trackToolCallId(toolCallId)
-
-      processed++
-
-      if (change) {
-        changes.push(change)
-      }
-    } catch {
-      // Skip bubbles that can't be parsed
-    }
-  }
-
-  return { changes, latestTimestamp, hasMore: false }
+type EditFileV2Result = {
+  beforeContentId: string
+  afterContentId: string
 }
 
 type ToolResult = {
@@ -273,84 +209,214 @@ type ToolResult = {
   }
 }
 
-/**
- * Look up and cache composerData for a given composerId.
- * Returns cached result on subsequent calls with the same composerId,
- * avoiding redundant DB queries when multiple bubbles share a composer.
- */
-async function resolveComposer(
-  composerId: string,
-  cache: Map<string, ComposerData | null>
-): Promise<{ composerData: ComposerData | null; model: string | undefined }> {
-  if (cache.has(composerId)) {
-    const cached = cache.get(composerId) ?? null
-    return { composerData: cached, model: cached?.modelConfig?.modelName }
-  }
+// ── Phase 1: Filter rows into candidates ─────────────────────────────
 
-  const rows = await getRowsByLike({
-    key: `composerData:${composerId}`,
-    keyOnly: false,
-  })
-  const row = rows.at(0)
-
-  if (!row?.value) {
-    cache.set(composerId, null)
-    return { composerData: null, model: undefined }
-  }
-
-  const composerData = JSON.parse(row.value) as unknown as ComposerData
-  cache.set(composerId, composerData)
-  return { composerData, model: composerData.modelConfig?.modelName }
+type FilterResult = {
+  candidates: BubbleCandidate[]
+  latestTimestamp: string | null
+  hasMore: boolean
 }
 
-/**
- * Result structure for edit_file_v2 tool.
- * Unlike other tools, it stores content IDs instead of inline diffs.
- */
-type EditFileV2Result = {
-  beforeContentId: string
-  afterContentId: string
+function filterRows(
+  rows: DBRow[],
+  startupTimestamp: Date,
+  batchLimit: number
+): FilterResult {
+  const candidates: BubbleCandidate[] = []
+  let latestTimestamp: string | null = null
+  let watermarkFrozen = false
+
+  for (const row of rows) {
+    if (!row.value) {
+      continue
+    }
+
+    try {
+      const bubbleData = JSON.parse(row.value) as unknown as BubbleData
+      const toolCallId = bubbleData.toolFormerData?.toolCallId
+      const status = bubbleData.toolFormerData?.status
+      const createdAt = new Date(bubbleData.createdAt)
+
+      // Watermark logic: only advance for completed rows before any non-completed row
+      if (status !== 'completed') {
+        watermarkFrozen = true
+      } else if (
+        !watermarkFrozen &&
+        (!latestTimestamp || bubbleData.createdAt > latestTimestamp)
+      ) {
+        latestTimestamp = bubbleData.createdAt
+      }
+
+      if (!toolCallId || status !== 'completed') {
+        continue
+      }
+
+      if (uploadedToolCallIds.has(toolCallId)) {
+        continue
+      }
+
+      if (createdAt < startupTimestamp) {
+        trackToolCallId(toolCallId)
+        continue
+      }
+
+      if (candidates.length >= batchLimit) {
+        return { candidates, latestTimestamp, hasMore: true }
+      }
+
+      const composerId = row.key.split(':')[1]
+      candidates.push({ row, bubbleData, composerId, toolCallId })
+    } catch {
+      // Skip unparseable rows
+    }
+  }
+
+  return { candidates, latestTimestamp, hasMore: false }
 }
 
-/**
- * Process a single bubble row that has already been pre-filtered
- * to have a completed tool call with valid timestamp.
- * Accepts pre-parsed bubbleData to avoid redundant JSON.parse.
- */
-async function processBubble(
-  bubbleRow: DBRow,
-  bubbleData: BubbleData,
-  composerCache: Map<string, ComposerData | null>
-): Promise<ProcessedChange | undefined> {
+// ── Phase 2: Batch-prefetch all needed data ──────────────────────────
+
+async function prefetchAllData(
+  candidates: BubbleCandidate[]
+): Promise<PrefetchedData> {
+  // 1. Collect unique composerIds and batch-fetch composer data
+  const composerIds = new Set<string>()
+  for (const c of candidates) {
+    composerIds.add(c.composerId)
+  }
+
+  const composerKeys = [...composerIds].map((id) => `composerData:${id}`)
+  const composerRows = await getBubblesByKeys(composerKeys)
+
+  const composers = new Map<string, ComposerData | null>()
+  for (const row of composerRows) {
+    const id = row.key.replace('composerData:', '')
+    try {
+      composers.set(id, JSON.parse(row.value!) as unknown as ComposerData)
+    } catch {
+      composers.set(id, null)
+    }
+  }
+  // Mark missing composers as null
+  for (const id of composerIds) {
+    if (!composers.has(id)) {
+      composers.set(id, null)
+    }
+  }
+
+  // 2. From composer data, collect all conversation bubble keys
+  const conversationKeys: string[] = []
+  for (const c of candidates) {
+    const composer = composers.get(c.composerId)
+    if (!composer?.fullConversationHeadersOnly) {
+      continue
+    }
+    for (const header of composer.fullConversationHeadersOnly) {
+      conversationKeys.push(`bubbleId:${c.composerId}:${header.bubbleId}`)
+    }
+  }
+
+  const conversationRows = await getBubblesByKeys([
+    ...new Set(conversationKeys),
+  ])
+  const conversations = new Map<string, DBRow>()
+  for (const row of conversationRows) {
+    conversations.set(row.key, row)
+  }
+
+  // 3. For edit_file_v2 bubbles, collect content IDs and batch-fetch
+  const contentKeys: string[] = []
+  for (const c of candidates) {
+    if (c.bubbleData.toolFormerData?.name !== 'edit_file_v2') {
+      continue
+    }
+    try {
+      const result = JSON.parse(
+        c.bubbleData.toolFormerData.result
+      ) as EditFileV2Result
+      if (result.beforeContentId) {
+        contentKeys.push(result.beforeContentId)
+      }
+      if (result.afterContentId) {
+        contentKeys.push(result.afterContentId)
+      }
+    } catch {
+      // Skip unparseable results
+    }
+  }
+
+  const content = new Map<string, string>()
+  if (contentKeys.length > 0) {
+    const contentRows = await getBubblesByKeys([...new Set(contentKeys)])
+    for (const row of contentRows) {
+      if (row.value) {
+        content.set(row.key, row.value)
+      }
+    }
+  }
+
+  return { composers, conversations, content }
+}
+
+// ── Phase 3: Process candidates using pre-fetched data ───────────────
+
+function processCandidates(
+  candidates: BubbleCandidate[],
+  prefetched: PrefetchedData
+): ProcessedChange[] {
+  const changes: ProcessedChange[] = []
+
+  for (const candidate of candidates) {
+    try {
+      const change = processBubbleWithPrefetch(candidate, prefetched)
+      trackToolCallId(candidate.toolCallId)
+      if (change) {
+        changes.push(change)
+      }
+    } catch {
+      trackToolCallId(candidate.toolCallId)
+    }
+  }
+
+  return changes
+}
+
+function processBubbleWithPrefetch(
+  candidate: BubbleCandidate,
+  prefetched: PrefetchedData
+): ProcessedChange | undefined {
+  const { bubbleData, composerId } = candidate
   const toolName = bubbleData.toolFormerData?.name
-  const toolCallId = bubbleData.toolFormerData?.toolCallId
   const toolResult = bubbleData.toolFormerData?.result
   if (!toolResult) {
-    logger.debug('processBubble: no toolResult')
     return
   }
 
   const createdAt = new Date(bubbleData.createdAt)
+  const composerData = prefetched.composers.get(composerId)
+  const model = composerData?.modelConfig?.modelName
+  if (!composerData || !model) {
+    return
+  }
 
-  // Handle edit_file_v2 differently - it has no codeBlockId but has content IDs
   if (toolName === 'edit_file_v2') {
-    return processEditFileV2Bubble(
+    return processEditFileV2WithPrefetch(
       bubbleData,
-      toolCallId,
       createdAt,
-      bubbleRow.key,
-      composerCache
+      composerId,
+      composerData,
+      model,
+      prefetched
     )
   }
 
   // For other tools, require codeBlockId
   const codeBlockId = bubbleData.toolFormerData?.additionalData?.codeblockId
-
   if (!codeBlockId) {
     logger.debug(
       {
         toolName,
-        toolCallId,
+        toolCallId: bubbleData.toolFormerData?.toolCallId,
         status: bubbleData.toolFormerData?.status,
         hasAdditionalData: !!bubbleData.toolFormerData?.additionalData,
       },
@@ -359,22 +425,12 @@ async function processBubble(
     return
   }
 
-  // Extract composerId from bubble key (format: bubbleId:{composerId}:{bubbleId})
-  const composerId = bubbleRow.key.split(':')[1]
-
-  const { composerData, model } = await resolveComposer(
-    composerId,
-    composerCache
-  )
-  if (!composerData || !model) {
-    return
-  }
-
   const additions = extractAdditions(toolResult)
-  const conversation = await extractConversation(
+  const conversation = extractConversationFromPrefetch(
     composerData,
     createdAt,
-    composerId
+    composerId,
+    prefetched.conversations
   )
   const filePath = extractFilePath(bubbleData)
 
@@ -389,22 +445,16 @@ async function processBubble(
   }
 }
 
-/**
- * Process an edit_file_v2 bubble which has a different structure:
- * - No codeBlockId in additionalData
- * - Result contains beforeContentId and afterContentId instead of diff chunks
- * - Content must be looked up from composer.content.* keys
- */
-async function processEditFileV2Bubble(
+function processEditFileV2WithPrefetch(
   bubbleData: BubbleData,
-  toolCallId: string | undefined,
   createdAt: Date,
-  bubbleKey: string,
-  composerCache: Map<string, ComposerData | null>
-): Promise<ProcessedChange | undefined> {
+  composerId: string,
+  composerData: ComposerData,
+  model: string,
+  prefetched: PrefetchedData
+): ProcessedChange | undefined {
   const toolResult = bubbleData.toolFormerData?.result
   if (!toolResult) {
-    logger.debug('processEditFileV2Bubble: no toolResult')
     return
   }
 
@@ -412,72 +462,33 @@ async function processEditFileV2Bubble(
   try {
     result = JSON.parse(toolResult) as EditFileV2Result
   } catch {
-    logger.debug('processEditFileV2Bubble: failed to parse toolResult')
     return
   }
 
   const { beforeContentId, afterContentId } = result
-  // afterContentId is required, but beforeContentId can be missing for new file creation
   if (!afterContentId) {
-    logger.debug(
-      { beforeContentId, afterContentId },
-      'processEditFileV2Bubble: missing afterContentId'
-    )
     return
   }
 
-  // Look up the actual content from composer.content.* keys
-  // For new files, beforeContentId is undefined, so we use empty string as before content
-  const [beforeContent, afterContent] = await Promise.all([
-    beforeContentId ? getComposerContent(beforeContentId) : Promise.resolve(''),
-    getComposerContent(afterContentId),
-  ])
+  const beforeContent = beforeContentId
+    ? (prefetched.content.get(beforeContentId) ?? '')
+    : ''
+  const afterContent = prefetched.content.get(afterContentId)
 
   if (afterContent === undefined) {
     logger.debug(
-      {
-        beforeContentId,
-        afterContentId,
-        hasBeforeContent: beforeContent !== undefined,
-        hasAfterContent: afterContent !== undefined,
-      },
-      'processEditFileV2Bubble: afterContent not found'
+      { beforeContentId, afterContentId },
+      'processEditFileV2: afterContent not found in prefetch'
     )
     return
   }
 
-  // Use empty string as fallback for beforeContent (new file case or lookup failure)
-  const resolvedBeforeContent = beforeContent ?? ''
-
-  // Compute additions by diffing before and after content
-  const additions = extractAdditionsFromDiff(
-    resolvedBeforeContent,
-    afterContent
-  )
-
-  // Extract composerId from bubble key (format: bubbleId:{composerId}:{bubbleId})
-  const keyParts = bubbleKey.split(':')
-  if (keyParts.length < 2) {
-    logger.debug(
-      { bubbleKey },
-      'processEditFileV2Bubble: invalid bubble key format'
-    )
-    return
-  }
-  const composerId = keyParts[1]
-
-  const { composerData, model } = await resolveComposer(
-    composerId,
-    composerCache
-  )
-  if (!composerData || !model) {
-    return
-  }
-
-  const conversation = await extractConversation(
+  const additions = extractAdditionsFromDiff(beforeContent, afterContent)
+  const conversation = extractConversationFromPrefetch(
     composerData,
     createdAt,
-    composerId
+    composerId,
+    prefetched.conversations
   )
   const filePath = extractFilePath(bubbleData)
 
@@ -491,6 +502,51 @@ async function processEditFileV2Bubble(
     filePath,
   }
 }
+
+// ── Main entry point ─────────────────────────────────────────────────
+
+/**
+ * Process bubble rows in two phases:
+ *
+ * Phase 1 (DB open): Filter rows, batch-prefetch all needed data (~3 queries)
+ * Phase 2 (DB closed): Process candidates using pre-fetched maps (pure CPU)
+ *
+ * This minimizes SHARED lock time on Cursor's database and ensures the
+ * connection is released before CPU-heavy processing begins.
+ */
+export async function processBubbles(
+  rows: DBRow[],
+  startupTimestamp: Date,
+  batchLimit: number = Infinity
+): Promise<ProcessBubblesResult> {
+  // Phase 1a: Filter and collect candidates (no DB access)
+  const { candidates, latestTimestamp, hasMore } = filterRows(
+    rows,
+    startupTimestamp,
+    batchLimit
+  )
+
+  if (candidates.length === 0) {
+    return { changes: [], latestTimestamp, hasMore }
+  }
+
+  // Phase 1b: Batch-prefetch all needed data (~3 DB queries)
+  // Always release the connection afterward, even if prefetch throws —
+  // otherwise a failed batch query could leave SHARED locks held.
+  let prefetched: PrefetchedData
+  try {
+    prefetched = await prefetchAllData(candidates)
+  } finally {
+    await releaseConnection()
+  }
+
+  // Phase 2: Process using pre-fetched data (no DB access, pure CPU)
+  const changes = processCandidates(candidates, prefetched)
+
+  return { changes, latestTimestamp, hasMore }
+}
+
+// ── Pure functions (no DB access) ────────────────────────────────────
 
 /**
  * Compute additions by diffing before and after content.
@@ -505,10 +561,8 @@ function extractAdditionsFromDiff(
 
   for (const change of changes) {
     if (change.added) {
-      // Split by newlines and add each line (removing trailing empty line if present)
       const lines = change.value.split('\n')
       for (const line of lines) {
-        // Only add non-empty lines or preserve intentional empty lines within content
         if (line || lines.indexOf(line) < lines.length - 1) {
           additions.push(line)
         }
@@ -516,7 +570,6 @@ function extractAdditionsFromDiff(
     }
   }
 
-  // Remove trailing empty string if the last added content ended with newline
   while (additions.length > 0 && additions[additions.length - 1] === '') {
     additions.pop()
   }
@@ -543,36 +596,25 @@ function extractAdditions(toolFormerDataResult: string): string {
 }
 
 /**
- * Extract conversation bubbles for a composer.
- * Uses batch fetch (single WHERE IN query) instead of N individual queries.
+ * Extract conversation bubbles from pre-fetched data.
+ * No DB access — reads from the prefetched conversations map.
  */
-async function extractConversation(
+function extractConversationFromPrefetch(
   composerData: ComposerData,
   bubbleTimestamp: Date,
-  composerId: string
-): Promise<BubbleData[]> {
+  composerId: string,
+  conversations: Map<string, DBRow>
+): BubbleData[] {
   const headers = composerData.fullConversationHeadersOnly || []
   if (headers.length === 0) {
     return []
-  }
-
-  // Build exact keys for batch fetch: bubbleId:{composerId}:{bubbleId}
-  const keys = headers.map((step) => `bubbleId:${composerId}:${step.bubbleId}`)
-
-  // Single batch query instead of N individual queries
-  const rows = await getBubblesByKeys(keys)
-
-  // Build a Map for O(1) lookup
-  const rowMap = new Map<string, DBRow>()
-  for (const row of rows) {
-    rowMap.set(row.key, row)
   }
 
   const conversationItems: BubbleData[] = []
 
   for (const step of headers) {
     const key = `bubbleId:${composerId}:${step.bubbleId}`
-    const bubbleRow = rowMap.get(key)
+    const bubbleRow = conversations.get(key)
 
     if (!bubbleRow?.value) {
       continue
@@ -591,8 +633,7 @@ async function extractConversation(
     conversationItems.push(bubbleData)
   }
 
-  //sometimes Cursor writes events to the internal DB with a delay so we get get events that happened after the bubbleTimestamp in the conversation
-  //This makes sure we read only events that happened before or at the same time as the bubbleTimestamp
+  // Filter to items created on/before bubbleTimestamp (handles Cursor write delays)
   return conversationItems
     .filter((item) => new Date(item.createdAt) <= bubbleTimestamp)
     .sort(

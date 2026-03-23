@@ -28,6 +28,11 @@ let statusBarItem: vscode.StatusBarItem | null = null
 let statusBar: StatusBarView | null = null
 let coordinator: TracyCoordinator | null = null
 let authManager: AuthManager | null = null
+let dbRetryTimer: ReturnType<typeof globalThis.setTimeout> | null = null
+
+const DB_RETRY_COOLDOWN_MS = 30 * 60 * 1000 // 30 minutes
+const MAX_DB_RETRIES = 5 // stop after 2.5 hours
+let dbRetryCount = 0
 
 export async function activate(context: vscode.ExtensionContext) {
   // Initialize configuration from THIS extension's package.json
@@ -69,13 +74,31 @@ export async function activate(context: vscode.ExtensionContext) {
     dailyMcpDetection.start()
     monitorManager = new MonitorManager(context, repoInfo.appType)
 
-    // Initialize database for Cursor
+    // Initialize database for Cursor — wrapped in its own try/catch so
+    // DB issues never prevent the rest of the extension from starting.
+    let dbInitFailed = false
     if (repoInfo.appType === AppType.CURSOR) {
-      await initDB(context)
+      try {
+        await initDB(context)
+      } catch (dbErr) {
+        dbInitFailed = true
+        logger.error(
+          { err: dbErr },
+          'Failed to initialize Cursor DB — CursorMonitor will not start. Scheduling retry.'
+        )
+        logError(
+          'initDB failed',
+          dbErr instanceof Error ? dbErr.message : String(dbErr)
+        )
+        scheduleDbRetry(context)
+      }
     }
 
-    // Start appropriate monitoring
-    await monitorManager.startMonitoring()
+    // Start appropriate monitoring — skip CursorMonitor if DB init failed
+    // (it would poll but always get empty results, wasting CPU)
+    await monitorManager.startMonitoring(
+      dbInitFailed ? ['CursorMonitor'] : undefined
+    )
 
     // Register configuration change listener
     // When configuration changes, we need to reload the window because:
@@ -107,12 +130,16 @@ export async function activate(context: vscode.ExtensionContext) {
     logger.info('Extension activated successfully')
     logInfo('Extension activated successfully')
   } catch (err) {
+    // Log at error level so the problem is visible in Datadog and extension output,
+    // but do NOT re-throw — we must never crash the extension host.
+    const errMsg = err instanceof Error ? err.message : String(err)
     logger.error({ err }, 'Failed to activate extension')
-    logError(
-      'Failed to activate extension',
-      err instanceof Error ? err.message : String(err)
-    )
-    throw err
+    logError('Failed to activate extension', errMsg)
+
+    // Show degraded state in the status bar so the user knows something is wrong
+    if (statusBar) {
+      statusBar.error(`Activation failed: ${errMsg}`)
+    }
   }
 }
 
@@ -214,9 +241,59 @@ async function getAuthenticated(
   }
 }
 
+/**
+ * Schedule a DB initialization retry after a cooldown period.
+ * If initDB failed at startup (e.g., DB locked, file missing), we wait 30 minutes
+ * and try again. If it still fails, we schedule another retry.
+ */
+function scheduleDbRetry(context: vscode.ExtensionContext): void {
+  if (dbRetryTimer) {
+    return
+  }
+
+  dbRetryCount++
+  if (dbRetryCount > MAX_DB_RETRIES) {
+    logger.error(
+      `Cursor DB initialization failed after ${MAX_DB_RETRIES} retries (${(MAX_DB_RETRIES * DB_RETRY_COOLDOWN_MS) / 60_000} min) — giving up. CursorMonitor will not start.`
+    )
+    logError('initDB retries exhausted', `${MAX_DB_RETRIES} retries failed`)
+    return
+  }
+
+  dbRetryTimer = globalThis.setTimeout(async () => {
+    dbRetryTimer = null
+    try {
+      logger.info(
+        `Retrying Cursor DB initialization (attempt ${dbRetryCount}/${MAX_DB_RETRIES})`
+      )
+      await initDB(context)
+      logger.info('Cursor DB initialized on retry — starting CursorMonitor')
+      dbRetryCount = 0
+
+      // All monitor start() methods are idempotent (check _isRunning),
+      // so calling startMonitoring() again is safe for already-running monitors.
+      if (monitorManager) {
+        await monitorManager.startMonitoring()
+      }
+    } catch (err) {
+      logger.error(
+        { err },
+        `Cursor DB retry ${dbRetryCount}/${MAX_DB_RETRIES} failed — scheduling another`
+      )
+      scheduleDbRetry(context)
+    }
+  }, DB_RETRY_COOLDOWN_MS)
+}
+
 export async function deactivate(): Promise<void> {
   try {
     logInfo('Extension deactivating')
+
+    if (dbRetryTimer) {
+      clearTimeout(dbRetryTimer)
+      dbRetryTimer = null
+    }
+
     dailyMcpDetection.stop()
 
     if (monitorManager) {

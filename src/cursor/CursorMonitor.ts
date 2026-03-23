@@ -16,8 +16,8 @@ const BASE_POLLING_INTERVAL = process.env.MOBB_TRACER_POLL_INTERVAL_MS
   ? Number(process.env.MOBB_TRACER_POLL_INTERVAL_MS)
   : DEFAULT_POLLING_INTERVAL
 const MAX_POLLING_INTERVAL = BASE_POLLING_INTERVAL * 6
-const BATCH_SIZE = 50
-const QUERY_LIMIT = 200
+const BATCH_SIZE = 10
+const QUERY_LIMIT = 50
 const CIRCUIT_BREAKER_THRESHOLD = 5
 const CIRCUIT_BREAKER_COOLDOWN = 120_000
 
@@ -165,29 +165,29 @@ export class CursorMonitor extends BaseMonitor {
           break
         }
 
-        // Increment failure count and apply exponential backoff
-        this.consecutiveFailures++
-        this.currentInterval = Math.min(
-          BASE_POLLING_INTERVAL * Math.pow(2, this.consecutiveFailures - 1),
-          MAX_POLLING_INTERVAL
-        )
-
         const errMsg = err instanceof Error ? err.message : String(err)
-        if (
+        const isLockError =
           errMsg.includes('SQLITE_BUSY') ||
           errMsg.includes('database is locked')
-        ) {
-          logger.warn({ err }, `${this.name} DB query failed, skipping cycle`)
-        } else {
-          logger.error({ err }, `Error in ${this.name} polling`)
-        }
 
-        logHeartbeat(
-          `poll error (${this.consecutiveFailures}x), next in ${Math.round(this.currentInterval / 1000)}s`,
-          {
-            error: errMsg.slice(0, 100),
-          }
-        )
+        if (isLockError) {
+          // Transient lock contention — skip this cycle, don't penalize.
+          // Cursor is likely writing to its DB. We'll try again next cycle.
+          logger.warn({ err }, `${this.name} DB query failed, skipping cycle`)
+          logHeartbeat('poll skipped (db locked)')
+        } else {
+          // Actual error — apply exponential backoff
+          this.consecutiveFailures++
+          this.currentInterval = Math.min(
+            BASE_POLLING_INTERVAL * Math.pow(2, this.consecutiveFailures - 1),
+            MAX_POLLING_INTERVAL
+          )
+          logger.error({ err }, `Error in ${this.name} polling`)
+          logHeartbeat(
+            `poll error (${this.consecutiveFailures}x), next in ${Math.round(this.currentInterval / 1000)}s`,
+            { error: errMsg.slice(0, 100) }
+          )
+        }
       }
     }
   }

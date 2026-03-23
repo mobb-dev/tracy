@@ -53,6 +53,16 @@ function spawnWorker(dbPath: string): void {
   worker.on(
     'message',
     (msg: { id: number; result?: unknown; error?: string }) => {
+      // id: -1 is sent by the worker's unhandledRejection handler — log it
+      // so the error isn't silently lost
+      if (msg.id === -1 && msg.error) {
+        logger.error(
+          { error: msg.error },
+          '[db.ts] Unhandled rejection in worker'
+        )
+        return
+      }
+
       const pending = pendingRequests.get(msg.id)
       if (!pending) {
         return
@@ -232,32 +242,33 @@ export type DBRow = {
 }
 
 /**
- * Query the SQLite database with LIKE pattern matching.
+ * Release the DB connection in the worker, freeing any SHARED locks.
+ * Called between the prefetch and process phases to ensure locks are not
+ * held while doing CPU-heavy data processing.
  */
-export async function getRowsByLike({
-  key,
-  value,
-  keyOnly = false,
-}: {
-  key: string
-  value?: string
-  keyOnly?: boolean
-}): Promise<DBRow[]> {
-  if (!key) {
-    throw new Error('key cannot be null')
+export async function releaseConnection(): Promise<void> {
+  if (!worker) {
+    return
   }
-
-  return workerRequest<DBRow[]>('getRowsByLike', { key, value, keyOnly })
+  try {
+    await workerRequest('releaseConnection')
+  } catch {
+    // Ignore — connection may already be closed
+  }
 }
 
 /**
  * Query for bubble rows created after a given timestamp.
  * Used for incremental polling — only fetches new rows.
+ * Returns empty array if the worker is unavailable (graceful degradation).
  */
 export async function getCompletedFileEditBubblesSince(
   sinceIso: string,
   limit: number
 ): Promise<DBRow[]> {
+  if (!ensureWorker()) {
+    return []
+  }
   return workerRequest<DBRow[]>('getCompletedFileEditBubblesSince', {
     sinceIso,
     limit,
@@ -265,20 +276,15 @@ export async function getCompletedFileEditBubblesSince(
 }
 
 /**
- * Get content stored at a composer.content.* key.
- */
-export async function getComposerContent(
-  contentId: string
-): Promise<string | undefined> {
-  return workerRequest<string | undefined>('getComposerContent', { contentId })
-}
-
-/**
- * Batch fetch bubble rows by exact keys.
- * Replaces N individual getRowsByLike calls in extractConversation.
+ * Batch fetch rows by exact keys from cursorDiskKV.
+ * Works for any key type (bubbles, composers, content).
+ * Returns empty array if the worker is unavailable (graceful degradation).
  */
 export async function getBubblesByKeys(keys: string[]): Promise<DBRow[]> {
   if (keys.length === 0) {
+    return []
+  }
+  if (!ensureWorker()) {
     return []
   }
 

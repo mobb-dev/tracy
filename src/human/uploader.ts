@@ -57,6 +57,7 @@ export async function uploadHumanChangesFromExtension(
         apiUrl: config.apiUrl,
         webAppUrl: config.webAppUrl,
         repositoryUrl,
+        sanitize: config.sanitizeData,
       }
     )
 
@@ -64,6 +65,7 @@ export async function uploadHumanChangesFromExtension(
     logger.info(
       {
         event: 'human_upload_sanitization',
+        sanitizationEnabled: config.sanitizeData,
         timestamp: new Date().toISOString(),
         uri: segment.uri,
         fileName: segment.fileName,
@@ -77,8 +79,11 @@ export async function uploadHumanChangesFromExtension(
           result.inferenceCounts.detections.total,
         appType: segment.appType,
         segmentClassification: segment.segmentClassification,
+        sanitizationDurationMs: result.sanitizationDurationMs,
       },
-      'Human upload sanitization metrics'
+      config.sanitizeData
+        ? 'Human upload sanitization metrics'
+        : 'Human upload (sanitization disabled)'
     )
   } catch (error) {
     logger.error({ error, segment }, 'Failed to upload human changes')

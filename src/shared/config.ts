@@ -27,6 +27,7 @@ type ExtensionConfig = {
   isConfigFromPackageJson: boolean
   /** VS Code configuration section: 'mobbAiTracerDev' for dev, 'mobbAiTracer' for production */
   configSection: string
+  sanitizeData: boolean
 }
 
 let cachedConfig: ExtensionConfig | null = null
@@ -90,6 +91,7 @@ export function initConfig(extensionPath: string): void {
   const vsConfigSection = isDevExtension ? 'mobbAiTracerDev' : 'mobbAiTracer'
   let finalApiUrl = pkgApiUrl
   let finalWebAppUrl = pkgWebAppUrl
+  let finalSanitizeData = false
 
   if (vscode.workspace.getConfiguration) {
     const vsConfig = vscode.workspace.getConfiguration(vsConfigSection)
@@ -110,6 +112,8 @@ export function initConfig(extensionPath: string): void {
     if (userWebAppUrl) {
       finalWebAppUrl = userWebAppUrl
     }
+
+    finalSanitizeData = vsConfig.get<boolean>('sanitizeData', false)
   }
 
   cachedConfig = {
@@ -120,6 +124,7 @@ export function initConfig(extensionPath: string): void {
     isDevExtension,
     isConfigFromPackageJson,
     configSection: vsConfigSection,
+    sanitizeData: finalSanitizeData,
   }
 }
 
@@ -148,6 +153,7 @@ export function hasRelevantConfigurationChanged(
   const section = cachedConfig?.configSection || 'mobbAiTracer'
   return (
     e.affectsConfiguration(`${section}.apiUrl`) ||
-    e.affectsConfiguration(`${section}.webAppUrl`)
+    e.affectsConfiguration(`${section}.webAppUrl`) ||
+    e.affectsConfiguration(`${section}.sanitizeData`)
   )
 }
