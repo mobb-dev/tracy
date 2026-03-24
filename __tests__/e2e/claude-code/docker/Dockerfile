@@ -89,7 +89,9 @@ echo ""\n\
 \n\
 echo "Starting tests..."\n\
 cd /workspace/clients/tracer_ext\n\
-npx vitest run __tests__/e2e/claude-code/claude-code-e2e.test.ts || TEST_EXIT_CODE=$?\n\
+TEST_DIR="__tests__/e2e/claude-code"\n\
+echo "Running all tests in: $TEST_DIR"\n\
+npx vitest run --no-file-parallelism "$TEST_DIR" || TEST_EXIT_CODE=$?\n\
 \n\
 # Show final status\n\
 if [ "${TEST_EXIT_CODE:-0}" -eq 0 ]; then\n\

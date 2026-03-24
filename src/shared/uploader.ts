@@ -5,7 +5,6 @@ import {
   type UploadAiBlameResult,
 } from '../mobbdev_src/args/commands/upload_ai_blame'
 import { AiBlameInferenceType } from '../mobbdev_src/features/analysis/scm/generates/client_generates'
-import { logInfo } from './circularLog'
 import { getConfig } from './config'
 import { logger } from './logger'
 import { getNormalizedRepoUrl } from './repositoryInfo'
@@ -91,11 +90,10 @@ export async function uploadCursorChanges(changes: ProcessedChange[]) {
         })
 
       logger.info('Upload completed successfully')
-      logInfo('Inference uploaded', {
-        tool: 'Cursor',
-        model: change.model,
-        repositoryUrl,
-      })
+      logger.info(
+        { data: { tool: 'Cursor', model: change.model, repositoryUrl } },
+        'Inference uploaded'
+      )
 
       // Log sanitization counts with metadata
       logger.info(
@@ -164,11 +162,10 @@ export async function uploadCopilotChanges(
         sanitize: config.sanitizeData,
       }
     )
-    logInfo('Inference uploaded', {
-      tool: 'Copilot',
-      model,
-      repositoryUrl,
-    })
+    logger.info(
+      { data: { tool: 'Copilot', model, repositoryUrl } },
+      'Inference uploaded'
+    )
 
     // Log sanitization counts with metadata
     logger.info(

@@ -240,16 +240,6 @@ vi.mock('../src/shared/uploader', async () => {
   }
 })
 
-// Mock circularLog
-vi.mock('../src/shared/circularLog', () => ({
-  initCircularLog: vi.fn(),
-  logInfo: vi.fn(),
-  logError: vi.fn(),
-  logWarn: vi.fn(),
-  logHeartbeat: vi.fn(),
-  logTimed: vi.fn(async (_label: string, fn: () => Promise<unknown>) => fn()),
-}))
-
 // Mock DailyMcpDetection
 vi.mock('../src/shared/DailyMcpDetection', () => ({
   dailyMcpDetection: {

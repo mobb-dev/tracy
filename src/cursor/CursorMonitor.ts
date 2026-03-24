@@ -2,7 +2,6 @@ import { setTimeout } from 'node:timers/promises'
 
 import * as vscode from 'vscode'
 
-import { logHeartbeat, logInfo } from '../shared/circularLog'
 import { BaseMonitor } from '../shared/IMonitor'
 import { logger } from '../shared/logger'
 import { AppType } from '../shared/repositoryInfo'
@@ -109,9 +108,10 @@ export class CursorMonitor extends BaseMonitor {
           logger.warn(
             `${this.name} circuit breaker open (${this.consecutiveFailures} failures), cooling down ${CIRCUIT_BREAKER_COOLDOWN / 1000}s`
           )
-          logHeartbeat('circuit breaker open', {
-            failures: this.consecutiveFailures,
-          })
+          logger.info(
+            { heartbeat: true, data: { failures: this.consecutiveFailures } },
+            'circuit breaker open'
+          )
           await setTimeout(CIRCUIT_BREAKER_COOLDOWN, undefined, {
             signal: this.abortController?.signal,
           })
@@ -149,14 +149,15 @@ export class CursorMonitor extends BaseMonitor {
         }
 
         // Heartbeat: separate ring buffer so idle polls don't push out operational logs
-        logHeartbeat(`poll: ${rows.length} rows, ${changes.length} changes`, {
-          hasMore,
-        })
+        logger.info(
+          { heartbeat: true, data: { hasMore } },
+          `poll: ${rows.length} rows, ${changes.length} changes`
+        )
 
         if (changes.length > 0) {
-          logInfo(
-            `Processed ${changes.length} change(s)${hasMore ? ' (more pending)' : ''}`,
-            { rows: rows.length }
+          logger.info(
+            { data: { rows: rows.length } },
+            `Processed ${changes.length} change(s)${hasMore ? ' (more pending)' : ''}`
           )
           await uploadCursorChanges(changes)
         }
@@ -174,7 +175,7 @@ export class CursorMonitor extends BaseMonitor {
           // Transient lock contention — skip this cycle, don't penalize.
           // Cursor is likely writing to its DB. We'll try again next cycle.
           logger.warn({ err }, `${this.name} DB query failed, skipping cycle`)
-          logHeartbeat('poll skipped (db locked)')
+          logger.info({ heartbeat: true }, 'poll skipped (db locked)')
         } else {
           // Actual error — apply exponential backoff
           this.consecutiveFailures++
@@ -183,9 +184,9 @@ export class CursorMonitor extends BaseMonitor {
             MAX_POLLING_INTERVAL
           )
           logger.error({ err }, `Error in ${this.name} polling`)
-          logHeartbeat(
-            `poll error (${this.consecutiveFailures}x), next in ${Math.round(this.currentInterval / 1000)}s`,
-            { error: errMsg.slice(0, 100) }
+          logger.info(
+            { heartbeat: true, data: { error: errMsg.slice(0, 100) } },
+            `poll error (${this.consecutiveFailures}x), next in ${Math.round(this.currentInterval / 1000)}s`
           )
         }
       }

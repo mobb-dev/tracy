@@ -13,7 +13,6 @@ import { Worker } from 'node:worker_threads'
 
 import * as vscode from 'vscode'
 
-import { logError } from '../shared/circularLog'
 import { logger } from '../shared/logger'
 
 const WORKER_REQUEST_TIMEOUT_MS = 10_000
@@ -79,7 +78,6 @@ function spawnWorker(dbPath: string): void {
 
   worker.on('error', (err: Error) => {
     logger.error({ err }, '[db.ts] Worker error')
-    logError('DB worker error', err.message)
     // Reject all pending requests
     for (const [id, pending] of pendingRequests) {
       pending.reject(new Error(`Worker error: ${err.message}`))
@@ -134,7 +132,6 @@ function ensureWorker(): boolean {
 
   restartTimestamps.push(now)
   logger.info('[db.ts] Restarting DB worker after unexpected exit')
-  logError('DB worker restart', 'auto-restarting after crash')
   spawnWorker(storedDbPath)
   return !!worker
 }

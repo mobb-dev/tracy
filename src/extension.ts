@@ -5,12 +5,6 @@ import { EXTENSION_NAME } from './env'
 import { AuthManager } from './mobbdev_src/commands/AuthManager'
 import { handleMobbLogin } from './mobbdev_src/commands/handleMobbLogin'
 import {
-  disposeCircularLog,
-  initCircularLog,
-  logError,
-  logInfo,
-} from './shared/circularLog'
-import {
   getConfig,
   hasRelevantConfigurationChanged,
   initConfig,
@@ -64,9 +58,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }
     logger.info(`Repository info: ${JSON.stringify(repoInfo)}`)
 
-    // Initialize circular log for crash forensics
-    initCircularLog()
-    logInfo('Extension activating')
+    logger.info('Extension activating')
 
     // Initialize web panel components
     setupView(context)
@@ -85,10 +77,6 @@ export async function activate(context: vscode.ExtensionContext) {
         logger.error(
           { err: dbErr },
           'Failed to initialize Cursor DB — CursorMonitor will not start. Scheduling retry.'
-        )
-        logError(
-          'initDB failed',
-          dbErr instanceof Error ? dbErr.message : String(dbErr)
         )
         scheduleDbRetry(context)
       }
@@ -128,13 +116,11 @@ export async function activate(context: vscode.ExtensionContext) {
       )
     }
     logger.info('Extension activated successfully')
-    logInfo('Extension activated successfully')
   } catch (err) {
     // Log at error level so the problem is visible in Datadog and extension output,
     // but do NOT re-throw — we must never crash the extension host.
     const errMsg = err instanceof Error ? err.message : String(err)
     logger.error({ err }, 'Failed to activate extension')
-    logError('Failed to activate extension', errMsg)
 
     // Show degraded state in the status bar so the user knows something is wrong
     if (statusBar) {
@@ -256,7 +242,7 @@ function scheduleDbRetry(context: vscode.ExtensionContext): void {
     logger.error(
       `Cursor DB initialization failed after ${MAX_DB_RETRIES} retries (${(MAX_DB_RETRIES * DB_RETRY_COOLDOWN_MS) / 60_000} min) — giving up. CursorMonitor will not start.`
     )
-    logError('initDB retries exhausted', `${MAX_DB_RETRIES} retries failed`)
+    logger.error('initDB retries exhausted — CursorMonitor will not start.')
     return
   }
 
@@ -287,7 +273,7 @@ function scheduleDbRetry(context: vscode.ExtensionContext): void {
 
 export async function deactivate(): Promise<void> {
   try {
-    logInfo('Extension deactivating')
+    logger.info('Extension deactivating')
 
     if (dbRetryTimer) {
       clearTimeout(dbRetryTimer)
@@ -304,14 +290,8 @@ export async function deactivate(): Promise<void> {
     await closeDB()
 
     logger.info('Extension deactivated')
-    logInfo('Extension deactivated')
-    disposeCircularLog()
     flushLogger()
   } catch (err) {
     logger.error({ err }, 'Error during deactivation')
-    logError(
-      'Error during deactivation',
-      err instanceof Error ? err.message : String(err)
-    )
   }
 }

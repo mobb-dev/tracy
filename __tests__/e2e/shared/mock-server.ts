@@ -52,6 +52,8 @@ export class MockUploadServer {
   private server: Server | null = null
   private uploads: InferenceUpload[] = []
   private tracyRecords: TracyRecord[] = []
+  // Each element is one UploadTracyRecords call with its records
+  private tracyBatches: TracyRecord[][] = []
   private port: number
   private requestLog: Array<{ method: string; path: string; body: unknown }> = []
   // Store S3 upload content separately, keyed by upload key
@@ -254,10 +256,11 @@ export class MockUploadServer {
         })
       } else if (operationName === 'UploadTracyRecords') {
         const records = (variables.records || []) as TracyRecord[]
+        this.tracyBatches.push([...records])
         for (const record of records) {
           this.tracyRecords.push(record)
           log(
-            `  ✅ [Mock] Captured tracy record: platform=${record.platform}, id=${record.recordId}`
+            `  ✅ [Mock] Captured tracy record: platform=${record.platform}, id=${record.recordId} (batch #${this.tracyBatches.length})`
           )
         }
         res.json({
@@ -442,6 +445,15 @@ export class MockUploadServer {
     return this.tracyRecords
   }
 
+  /**
+   * Returns each UploadTracyRecords call as a separate batch.
+   * Useful for verifying that the cursor mechanism produces
+   * distinct upload calls with non-overlapping record sets.
+   */
+  getTracyBatches(): TracyRecord[][] {
+    return this.tracyBatches
+  }
+
   getS3Uploads(): Map<string, string> {
     return this.s3Uploads
   }
@@ -456,6 +468,7 @@ export class MockUploadServer {
 
   clearTracyRecords(): void {
     this.tracyRecords = []
+    this.tracyBatches = []
   }
 
   clearRequestLog(): void {
@@ -567,6 +580,47 @@ export class MockUploadServer {
 
     log(
       `  ✅ [Mock] Received ${this.tracyRecords.length} tracy records in ${Math.round((Date.now() - startTime) / 1000)}s`
+    )
+  }
+
+  /**
+   * Wait until at least `count` distinct UploadTracyRecords calls have arrived.
+   */
+  async waitForTracyBatches(
+    count: number,
+    options: { timeout: number; logInterval?: number }
+  ): Promise<void> {
+    const startTime = Date.now()
+    const checkInterval = 1000
+    const logInterval = options.logInterval ?? 5000
+    let lastLogTime = 0
+
+    log(
+      `  ⏳ [Mock] Waiting for ${count} tracy batch(es) (timeout: ${options.timeout / 1000}s)...`
+    )
+
+    while (this.tracyBatches.length < count) {
+      const elapsed = Date.now() - startTime
+
+      if (elapsed > options.timeout) {
+        throw new Error(
+          `Timeout waiting for ${count} tracy batches. Got ${this.tracyBatches.length} after ${options.timeout}ms.\n` +
+            `Total records across batches: ${this.tracyRecords.length}`
+        )
+      }
+
+      if (elapsed - lastLogTime >= logInterval) {
+        log(
+          `  📊 [Mock] Progress: ${this.tracyBatches.length}/${count} tracy batches, ${Math.round(elapsed / 1000)}s elapsed`
+        )
+        lastLogTime = elapsed
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, checkInterval))
+    }
+
+    log(
+      `  ✅ [Mock] Received ${this.tracyBatches.length} tracy batches in ${Math.round((Date.now() - startTime) / 1000)}s`
     )
   }
 

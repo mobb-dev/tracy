@@ -3,6 +3,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
+
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { initGitRepository } from '../shared/git-utils'
@@ -11,8 +12,8 @@ import { CheckpointTracker } from '../shared/test-utilities'
 
 // Test configuration
 const UPLOAD_WAIT_TIMEOUT = 30000 // 30 seconds for upload
-const CLAUDE_CODE_TIMEOUT = 60000 // 60 seconds for Claude Code to respond
-const TEST_TIMEOUT = 120000 // 2 minutes total test timeout
+const CLAUDE_CODE_TIMEOUT = 30000 // 30 seconds for Claude Code to respond
+const TEST_TIMEOUT = 90000 // 90 seconds total test timeout
 
 type ClaudeCodeSettings = {
   hooks?: {
@@ -84,8 +85,6 @@ describe('Claude Code E2E with Hook Integration', () => {
     )
     if (claudeSettingsBackup !== null) {
       fs.writeFileSync(claudeSettingsPath, claudeSettingsBackup)
-    } else if (fs.existsSync(claudeSettingsPath)) {
-      fs.unlinkSync(claudeSettingsPath)
     }
 
     // Cleanup test workspace
@@ -196,7 +195,7 @@ describe('Claude Code E2E with Hook Integration', () => {
         hooks: {
           PostToolUse: [
             {
-              matcher: 'Edit|Write',
+              matcher: '',
               hooks: [
                 {
                   type: 'command',
@@ -282,33 +281,50 @@ describe('Claude Code E2E with Hook Integration', () => {
         console.log(`  Files in workspace: ${files.join(', ')}`)
       }
 
-      // ==== Step 7: Wait for hook to capture and upload attribution ====
-      tracker.logTimestamp('Waiting for attribution upload')
+      // ==== Step 7: Wait for hook to capture and upload raw tracy records ====
+      tracker.logTimestamp('Waiting for tracy record upload')
       console.log(`  Timeout: ${UPLOAD_WAIT_TIMEOUT / 1000}s`)
 
-      await mockServer.waitForUploads(1, {
+      await mockServer.waitForTracyRecords(1, {
         timeout: UPLOAD_WAIT_TIMEOUT,
         logInterval: 5000,
       })
       tracker.mark('Hook Captured Attribution')
 
-      // ==== Step 8: Validate upload ====
-      tracker.logTimestamp('Validating attribution upload')
-      const uploads = mockServer.getCapturedUploads()
+      // ==== Step 8: Validate tracy record upload ====
+      tracker.logTimestamp('Validating tracy record upload')
+      const records = mockServer.getCapturedTracyRecords()
 
-      expect(uploads.length).toBeGreaterThan(0)
+      expect(records.length).toBeGreaterThan(0)
 
-      console.log(`  Uploads received: ${uploads.length}`)
+      console.log(`  Tracy records received: ${records.length}`)
 
-      const upload = uploads[0]
-      console.log(`  Tool: ${upload.tool}`)
-      console.log(`  Model: ${upload.model}`)
-      console.log(`  Response time: ${upload.responseTime}`)
+      const record = records[0]
+      console.log(`  Platform: ${record.platform}`)
+      console.log(`  Record ID: ${record.recordId}`)
+      console.log(`  Client version: ${record.clientVersion}`)
 
-      // Validate expected fields
-      expect(upload.tool).toBe('Claude Code')
-      expect(upload.model).toBeTruthy()
-      expect(upload.responseTime).toBeTruthy()
+      // Validate TracyRecordInput fields
+      expect(record.platform).toBe('CLAUDE_CODE')
+      expect(record.recordId).toBeTruthy()
+      expect(record.clientVersion).toBeTruthy()
+      expect(record.rawDataS3Key).toBeTruthy()
+
+      // rawData is uploaded to S3 via presigned URL — retrieve from mock S3 store
+      const s3Uploads = mockServer.getS3Uploads()
+      const s3Content = s3Uploads.get(record.rawDataS3Key!)
+      expect(s3Content, `S3 upload not found for key: ${record.rawDataS3Key}`).toBeTruthy()
+
+      // Parse the content stored at the S3 key
+      const parsedRawData = JSON.parse(s3Content!)
+      expect(parsedRawData.type).toBeTruthy()
+      expect([
+        'user',
+        'assistant',
+        'system',
+        'summary',
+        'progress',
+      ]).toContain(parsedRawData.type)
 
       tracker.mark('Attribution Uploaded')
 
