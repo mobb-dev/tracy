@@ -12,6 +12,7 @@ import { parentPort, workerData } from 'node:worker_threads'
 const { DatabaseSync } = require('node:sqlite')
 
 type DBRow = {
+  rowid?: number
   key: string
   value?: string
 }
@@ -28,17 +29,8 @@ type WorkerResponse = {
   error?: string
 }
 
-const FILE_EDIT_TOOLS = [
-  'search_replace',
-  'apply_patch',
-  'write',
-  'edit_file',
-  'edit_file_v2',
-  'MultiEdit',
-]
-
 let db: InstanceType<typeof DatabaseSync> | null = null
-const { dbPath } = workerData
+const { dbPath, sessionBubblesLimit } = workerData
 const journalPath = `${dbPath}-journal`
 
 // Safety net: catch unexpected promise rejections so the worker never crashes silently
@@ -99,45 +91,101 @@ function execute<T>(fn: (conn: InstanceType<typeof DatabaseSync>) => T): T {
   }
 }
 
-function getCompletedFileEditBubblesSince(
-  sinceIso: string,
-  limit: number
-): DBRow[] {
-  return execute((conn) => {
-    const placeholders = FILE_EDIT_TOOLS.map(() => '?').join(', ')
-    const sql = `
-      SELECT key, value FROM cursorDiskKV
-      WHERE key LIKE 'bubbleId:%'
-      AND json_extract(value, '$.toolFormerData.name') IN (${placeholders})
-      AND json_extract(value, '$.createdAt') > ?
-      ORDER BY json_extract(value, '$.createdAt') ASC
-      LIMIT ?
-    `
-      .replace(/\n/g, ' ')
-      .trim()
+const SESSION_BUBBLES_LIMIT: number = sessionBubblesLimit ?? 100
 
+/**
+ * Fetch the most recent bubble keys for session discovery.
+ * Returns keys only (no value) — avoids JSON parsing in SQL entirely.
+ * The key column is indexed, so this is a pure B-tree range scan.
+ * We fetch the last N keys by rowid DESC as a proxy for recency
+ * (Cursor appends rows chronologically).
+ */
+function getRecentBubbleKeys(limit: number): DBRow[] {
+  return execute((conn) => {
+    const sql = `SELECT key FROM cursorDiskKV WHERE key LIKE 'bubbleId:%' ORDER BY rowid DESC LIMIT ?`
     const stmt = conn.prepare(sql)
-    return stmt.all(...FILE_EDIT_TOOLS, sinceIso, limit) as DBRow[]
+    return stmt.all(limit) as DBRow[]
   })
 }
 
-const SQLITE_MAX_PARAMS = 500
+/**
+ * Escape LIKE wildcards (% and _) in a string so they are matched literally.
+ */
+function escapeLikeWildcards(value: string): string {
+  return value.replace(/[%_\\]/g, '\\$&')
+}
 
-function getBubblesByKeys(keys: string[]): DBRow[] {
-  if (keys.length === 0) {
-    return []
-  }
+type SessionRequest = {
+  composerId: string
+  afterRowId?: number
+  /** Exact keys of previously-incomplete bubbles to re-check. */
+  incompleteBubbleKeys?: string[]
+}
 
+type SessionResult = {
+  composerId: string
+  bubbles: DBRow[]
+  composerDataValue: string | undefined
+  /** Re-fetched incomplete bubbles (by exact key). */
+  revisitedBubbles: DBRow[]
+}
+
+/**
+ * Batch-fetch bubbles + composerData for multiple sessions in a single
+ * connection open/close cycle. Reduces lock acquisition from 2×N to 1.
+ * Uses rowid for filtering — pure B-tree scan, no JSON parsing in SQL.
+ * Also re-fetches incomplete bubbles by exact key to check if they've completed.
+ */
+function prefetchSessions(sessions: SessionRequest[]): SessionResult[] {
   return execute((conn) => {
-    const results: DBRow[] = []
-    for (let i = 0; i < keys.length; i += SQLITE_MAX_PARAMS) {
-      const chunk = keys.slice(i, i + SQLITE_MAX_PARAMS)
-      const placeholders = chunk.map(() => '?').join(', ')
-      const sql = `SELECT key, value FROM cursorDiskKV WHERE key IN (${placeholders})`
-      const stmt = conn.prepare(sql)
-      results.push(...(stmt.all(...chunk) as DBRow[]))
-    }
-    return results
+    const bubbleStmtWithRowId = conn.prepare(
+      `SELECT rowid, key, value FROM cursorDiskKV WHERE key LIKE ? ESCAPE '\\' AND rowid > ? ORDER BY rowid ASC LIMIT ?`
+    )
+    const bubbleStmtNoRowId = conn.prepare(
+      `SELECT rowid, key, value FROM cursorDiskKV WHERE key LIKE ? ESCAPE '\\' ORDER BY rowid ASC LIMIT ?`
+    )
+    const composerStmt = conn.prepare(
+      'SELECT value FROM cursorDiskKV WHERE key = ?'
+    )
+    const exactKeyStmt = conn.prepare(
+      'SELECT rowid, key, value FROM cursorDiskKV WHERE key = ?'
+    )
+
+    return sessions.map(({ composerId, afterRowId, incompleteBubbleKeys }) => {
+      const escapedId = escapeLikeWildcards(composerId)
+      const pattern = `bubbleId:${escapedId}:%`
+
+      const bubbles =
+        afterRowId != null
+          ? (bubbleStmtWithRowId.all(
+              pattern,
+              afterRowId,
+              SESSION_BUBBLES_LIMIT
+            ) as DBRow[])
+          : (bubbleStmtNoRowId.all(pattern, SESSION_BUBBLES_LIMIT) as DBRow[])
+
+      const row = composerStmt.get(`composerData:${composerId}`) as
+        | { value?: string }
+        | undefined
+
+      // Re-fetch incomplete bubbles by exact key (O(1) each)
+      const revisitedBubbles: DBRow[] = []
+      if (incompleteBubbleKeys) {
+        for (const key of incompleteBubbleKeys) {
+          const result = exactKeyStmt.get(key) as DBRow | undefined
+          if (result) {
+            revisitedBubbles.push(result)
+          }
+        }
+      }
+
+      return {
+        composerId,
+        bubbles,
+        composerDataValue: row?.value,
+        revisitedBubbles,
+      }
+    })
   })
 }
 
@@ -147,11 +195,7 @@ parentPort?.on('message', (msg: WorkerRequest) => {
   let response: WorkerResponse
 
   // Check journal file before any query — if Cursor is mid-write, skip immediately
-  if (
-    method !== 'close' &&
-    method !== 'releaseConnection' &&
-    isCursorWriting()
-  ) {
+  if (method !== 'close' && isCursorWriting()) {
     parentPort?.postMessage({ id, error: 'database is locked' })
     return
   }
@@ -160,18 +204,11 @@ parentPort?.on('message', (msg: WorkerRequest) => {
     let result: unknown
 
     switch (method) {
-      case 'getCompletedFileEditBubblesSince':
-        result = getCompletedFileEditBubblesSince(
-          params.sinceIso as string,
-          params.limit as number
-        )
+      case 'getRecentBubbleKeys':
+        result = getRecentBubbleKeys(params.limit as number)
         break
-      case 'getBubblesByKeys':
-        result = getBubblesByKeys(params.keys as string[])
-        break
-      case 'releaseConnection':
-        closeConnection()
-        result = true
+      case 'prefetchSessions':
+        result = prefetchSessions(params.sessions as SessionRequest[])
         break
       case 'close':
         closeConnection()

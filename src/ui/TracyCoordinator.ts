@@ -102,7 +102,7 @@ export class TracyCoordinator {
       this.view.refresh(LineState.OUTSIDE_REPO)
       return
     }
-    logger.info(`TracyCoordinator: active editor changed to ${filePath}`)
+    logger.debug(`TracyCoordinator: active editor changed to ${filePath}`)
     // Switching between repos — cancel in-flight work in the old controller.
     if (this.activeController && this.activeController !== controller) {
       this.activeController.invalidate()

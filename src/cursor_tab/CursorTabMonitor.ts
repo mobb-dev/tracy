@@ -4,11 +4,15 @@ import { join } from 'node:path'
 
 import * as vscode from 'vscode'
 
-import { AiBlameInferenceType } from '../mobbdev_src/features/analysis/scm/generates/client_generates'
+import {
+  EditType,
+  InferencePlatform,
+} from '../mobbdev_src/features/analysis/scm/generates/client_generates'
+import { getConfig } from '../shared/config'
 import { BaseMonitor } from '../shared/IMonitor'
 import { logger } from '../shared/logger'
-import { AppType } from '../shared/repositoryInfo'
-import { uploadCursorChanges } from '../shared/uploader'
+import { AppType, getNormalizedRepoUrl } from '../shared/repositoryInfo'
+import { uploadTracyRecords } from '../shared/uploader'
 import { AcceptanceTracker } from './AcceptanceTracker'
 
 export class CursorTabMonitor extends BaseMonitor {
@@ -149,21 +153,23 @@ export class CursorTabMonitor extends BaseMonitor {
     const additions = aiGeneratedAdditions.join('\n').trim()
 
     if (additions.length === 0) {
-      logger.info(`Cursor tab additions are empty`)
+      logger.debug('Cursor tab: empty additions, skipping')
       return
     }
 
     if (additions.length < 28) {
-      logger.info(`Cursor tab additions are smaller than 28. Ignore tracking`)
+      logger.debug(
+        `Cursor tab: additions too short (${additions.length} chars), skipping`
+      )
       return
     }
 
     if (!this.activeEditorUri) {
-      logger.info(`No active editor, cannot track completion acceptance`)
+      logger.debug('Cursor tab: no active editor, skipping')
       return
     }
 
-    logger.info(`Cursor tab additions: ${additions.slice(0, 100)}...`)
+    logger.info(`Cursor tab: tracking ${additions.length} chars`)
 
     // Track as pending instead of immediate upload
     this.acceptanceTracker?.trackPendingCompletion(
@@ -173,16 +179,24 @@ export class CursorTabMonitor extends BaseMonitor {
   }
 
   private uploadAcceptedCompletion(additions: string): void {
-    uploadCursorChanges([
-      {
-        additions,
-        createdAt: new Date(),
-        model: 'Cursor Tab Autocomplete',
-        conversation: [],
-        type: AiBlameInferenceType.TabAutocomplete,
-      },
-    ]).catch((err) => {
-      logger.error({ err }, 'Cursor tab upload failed')
-    })
+    const filePath = this.activeEditorUri
+    getNormalizedRepoUrl(filePath)
+      .then((repositoryUrl) =>
+        uploadTracyRecords([
+          {
+            platform: InferencePlatform.Cursor,
+            recordId: crypto.randomUUID(),
+            recordTimestamp: new Date().toISOString(),
+            editType: EditType.TabAutocomplete,
+            additions,
+            filePath,
+            repositoryUrl: repositoryUrl ?? undefined,
+            clientVersion: getConfig().extensionVersion,
+          },
+        ])
+      )
+      .catch((err) => {
+        logger.error({ err }, 'Cursor tab upload failed')
+      })
   }
 }

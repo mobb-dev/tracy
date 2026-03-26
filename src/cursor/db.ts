@@ -14,6 +14,7 @@ import { Worker } from 'node:worker_threads'
 import * as vscode from 'vscode'
 
 import { logger } from '../shared/logger'
+import { SESSION_BUBBLES_LIMIT } from './rawProcessor'
 
 const WORKER_REQUEST_TIMEOUT_MS = 10_000
 
@@ -46,7 +47,7 @@ const pendingRequests = new Map<
 function spawnWorker(dbPath: string): void {
   const workerPath = path.join(__dirname, 'dbWorker.js')
   worker = new Worker(workerPath, {
-    workerData: { dbPath },
+    workerData: { dbPath, sessionBubblesLimit: SESSION_BUBBLES_LIMIT },
   })
 
   worker.on(
@@ -234,56 +235,53 @@ function getDatabasePath(context: vscode.ExtensionContext): string {
  * Represents a row from the cursorDiskKV table in Cursor's database.
  */
 export type DBRow = {
+  rowid?: number
   key: string
   value?: string
 }
 
 /**
- * Release the DB connection in the worker, freeing any SHARED locks.
- * Called between the prefetch and process phases to ensure locks are not
- * held while doing CPU-heavy data processing.
+ * Fetch recent bubble keys for session discovery.
+ * Returns keys only (no value) — pure index scan, no JSON parsing.
+ * Returns empty array if the worker is unavailable (graceful degradation).
  */
-export async function releaseConnection(): Promise<void> {
-  if (!worker) {
-    return
+export async function getRecentBubbleKeys(limit: number): Promise<DBRow[]> {
+  if (!worker && !ensureWorker()) {
+    logger.warn(
+      '[db.ts] Worker unavailable, returning [] for getRecentBubbleKeys'
+    )
+    return []
   }
-  try {
-    await workerRequest('releaseConnection')
-  } catch {
-    // Ignore — connection may already be closed
-  }
+  return workerRequest<DBRow[]>('getRecentBubbleKeys', { limit })
+}
+
+type SessionRequest = {
+  composerId: string
+  afterRowId?: number
+  incompleteBubbleKeys?: string[]
+}
+
+type SessionResult = {
+  composerId: string
+  bubbles: DBRow[]
+  composerDataValue: string | undefined
+  revisitedBubbles: DBRow[]
 }
 
 /**
- * Query for bubble rows created after a given timestamp.
- * Used for incremental polling — only fetches new rows.
+ * Batch-fetch bubbles + composerData for multiple sessions in a single
+ * worker round-trip. Single connection open/close = single lock acquisition.
  * Returns empty array if the worker is unavailable (graceful degradation).
  */
-export async function getCompletedFileEditBubblesSince(
-  sinceIso: string,
-  limit: number
-): Promise<DBRow[]> {
-  if (!ensureWorker()) {
+export async function prefetchSessions(
+  sessions: SessionRequest[]
+): Promise<SessionResult[]> {
+  if (sessions.length === 0) {
     return []
   }
-  return workerRequest<DBRow[]>('getCompletedFileEditBubblesSince', {
-    sinceIso,
-    limit,
-  })
-}
-
-/**
- * Batch fetch rows by exact keys from cursorDiskKV.
- * Works for any key type (bubbles, composers, content).
- * Returns empty array if the worker is unavailable (graceful degradation).
- */
-export async function getBubblesByKeys(keys: string[]): Promise<DBRow[]> {
-  if (keys.length === 0) {
+  if (!worker && !ensureWorker()) {
+    logger.warn('[db.ts] Worker unavailable, returning [] for prefetchSessions')
     return []
   }
-  if (!ensureWorker()) {
-    return []
-  }
-
-  return workerRequest<DBRow[]>('getBubblesByKeys', { keys })
+  return workerRequest<SessionResult[]>('prefetchSessions', { sessions })
 }

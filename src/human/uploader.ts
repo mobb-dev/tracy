@@ -1,19 +1,13 @@
 import {
-  PromptItemArray,
-  uploadAiBlameHandlerFromExtension,
-  type UploadAiBlameResult,
-} from '../mobbdev_src/args/commands/upload_ai_blame'
-import { AiBlameInferenceType } from '../mobbdev_src/features/analysis/scm/generates/client_generates'
+  EditType,
+  InferencePlatform,
+} from '../mobbdev_src/features/analysis/scm/generates/client_generates'
+import { sanitizeData } from '../mobbdev_src/utils/sanitize-sensitive-data'
 import { getConfig } from '../shared/config'
 import { logger } from '../shared/logger'
 import { AppType, getNormalizedRepoUrl } from '../shared/repositoryInfo'
-import {
-  type SegmentClassificationCode,
-  TOOL_NAME_HUMAN_TYPING,
-  UPLOAD_MODEL_HUMAN,
-  UPLOAD_TOOL_CURSOR,
-  UPLOAD_TOOL_VSCODE,
-} from './types'
+import { uploadTracyRecords } from '../shared/uploader'
+import type { SegmentClassificationCode } from './types'
 
 /** Human code segment upload payload (IDE-side). */
 export type HumanSegmentUpload = {
@@ -32,109 +26,37 @@ export type HumanSegmentUpload = {
   segmentClassification: SegmentClassificationCode
 }
 
-/** Uploads human segments to backend using shared handler. */
+/** Uploads human segments via the tracy batch pipeline. */
 export async function uploadHumanChangesFromExtension(
   segment: HumanSegmentUpload
 ): Promise<void> {
-  const artifacts = buildHumanUploadArtifact(segment)
+  const platform =
+    segment.appType === AppType.VSCODE
+      ? InferencePlatform.ClaudeCode
+      : InferencePlatform.Cursor
 
   try {
     const config = getConfig()
     const repositoryUrl = await getNormalizedRepoUrl(segment.uri)
-    logger.info('Starting human changes upload to backend...', {
-      apiUrl: config.apiUrl,
-      webAppUrl: config.webAppUrl,
-      repositoryUrl,
-    })
-    const result: UploadAiBlameResult = await uploadAiBlameHandlerFromExtension(
-      {
-        prompts: artifacts.prompts,
-        inference: artifacts.inference,
-        model: artifacts.model,
-        tool: artifacts.tool,
-        responseTime: new Date().toISOString(),
-        blameType: AiBlameInferenceType.HumanEdit,
-        apiUrl: config.apiUrl,
-        webAppUrl: config.webAppUrl,
-        repositoryUrl,
-        sanitize: config.sanitizeData,
-      }
-    )
+    const trimmed = segment.changedLines.trim()
+    const additions = config.sanitizeData
+      ? String(await sanitizeData(trimmed))
+      : trimmed
 
-    // Log sanitization counts with metadata
-    logger.info(
+    await uploadTracyRecords([
       {
-        event: 'human_upload_sanitization',
-        sanitizationEnabled: config.sanitizeData,
-        timestamp: new Date().toISOString(),
-        uri: segment.uri,
-        fileName: segment.fileName,
-        relativePath: segment.relativePath,
-        promptsUUID: result.promptsUUID,
-        inferenceUUID: result.inferenceUUID,
-        promptsCounts: result.promptsCounts.detections,
-        inferenceCounts: result.inferenceCounts.detections,
-        totalDetections:
-          result.promptsCounts.detections.total +
-          result.inferenceCounts.detections.total,
-        appType: segment.appType,
-        segmentClassification: segment.segmentClassification,
-        sanitizationDurationMs: result.sanitizationDurationMs,
+        platform,
+        recordId: crypto.randomUUID(),
+        recordTimestamp: segment.timestamp,
+        editType: EditType.HumanEdit,
+        additions,
+        filePath: segment.relativePath || segment.fileName,
+        repositoryUrl: repositoryUrl ?? undefined,
+        clientVersion: getConfig().extensionVersion,
       },
-      config.sanitizeData
-        ? 'Human upload sanitization metrics'
-        : 'Human upload (sanitization disabled)'
-    )
+    ])
   } catch (error) {
     logger.error({ error, segment }, 'Failed to upload human changes')
     throw error
-  }
-}
-
-/** Builds prompts/inference for backend. */
-function buildHumanUploadArtifact(segment: HumanSegmentUpload): {
-  prompts: PromptItemArray
-  inference: string
-  model: string
-  tool: string
-} {
-  // Build prompts: one TOOL_EXECUTION per segment with name 'human_typing'
-  const prompts: PromptItemArray = [
-    {
-      type: 'TOOL_EXECUTION',
-      attachedFiles: [
-        {
-          relativePath: segment.relativePath || segment.fileName,
-          startLine: segment.startLine,
-        },
-      ],
-      text: '...',
-      date: new Date(segment.timestamp),
-      tool: {
-        name: TOOL_NAME_HUMAN_TYPING,
-        parameters: JSON.stringify({
-          uri: segment.uri,
-          fileName: segment.fileName,
-          relativePath: segment.relativePath,
-          startLine: segment.startLine,
-          endLine: segment.endLine,
-          changedLines: segment.changedLines,
-          metrics: segment.metrics,
-          segmentClassification: segment.segmentClassification,
-        }),
-        result: '...',
-      },
-    },
-  ]
-
-  const inference = segment.changedLines.trim()
-  return {
-    prompts,
-    inference,
-    model: UPLOAD_MODEL_HUMAN,
-    tool:
-      segment.appType === AppType.VSCODE
-        ? UPLOAD_TOOL_VSCODE
-        : UPLOAD_TOOL_CURSOR,
   }
 }

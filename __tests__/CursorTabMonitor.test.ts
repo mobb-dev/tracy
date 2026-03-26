@@ -8,6 +8,25 @@ import { CursorTabMonitor } from '../src/cursor_tab/CursorTabMonitor'
 import { AppType } from '../src/shared/repositoryInfo'
 import * as uploader from '../src/shared/uploader'
 
+vi.mock('../src/shared/repositoryInfo', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../src/shared/repositoryInfo')>()
+  return {
+    ...actual,
+    getNormalizedRepoUrl: vi
+      .fn()
+      .mockResolvedValue('https://github.com/test-org/test-repo'),
+  }
+})
+
+vi.mock('../src/shared/config', () => ({
+  getConfig: vi.fn(() => ({
+    apiUrl: 'https://api.mobb.ai/v1/graphql',
+    webAppUrl: 'https://app.mobb.ai',
+    extensionVersion: '0.1.0',
+  })),
+}))
+
 vi.mock('vscode', () => {
   return {
     env: {
@@ -43,16 +62,16 @@ vi.mock('../src/shared/logger', () => {
   }
 })
 
-const uploadCursorChangesSpy = vi.spyOn(uploader, 'uploadCursorChanges')
+const uploadTracyRecordsSpy = vi.spyOn(uploader, 'uploadTracyRecords')
 
 describe('CursorTabMonitor', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    uploadCursorChangesSpy.mockClear()
+    uploadTracyRecordsSpy.mockClear()
   })
 
   it('should process log entries and upload cursor changes on happy flow', async () => {
-    uploadCursorChangesSpy.mockResolvedValue()
+    uploadTracyRecordsSpy.mockResolvedValue()
 
     const monitor = new CursorTabMonitor(
       {
@@ -86,17 +105,22 @@ describe('CursorTabMonitor', () => {
       contentChanges: [{ text: additions }],
     } as unknown as vscode.TextDocumentChangeEvent)
 
-    // Upload is scheduled via a Promise chain; allow it to be queued.
+    // Upload is scheduled via a Promise chain (getNormalizedRepoUrl → uploadTracyRecords).
+    // Two microtask ticks needed for the .then() chain to resolve.
+    await setTimeout(0)
     await setTimeout(0)
 
-    expect(uploadCursorChangesSpy).toHaveBeenCalledOnce()
+    expect(uploadTracyRecordsSpy).toHaveBeenCalledOnce()
 
-    const change = uploadCursorChangesSpy.mock.calls.at(0)?.at(0)?.at(0)
-    expect(change.additions).toBe(additions)
+    const record = uploadTracyRecordsSpy.mock.calls.at(0)?.at(0)?.at(0)
+    expect(record.additions).toBe(additions)
+    expect(record.platform).toBe('CURSOR')
+    expect(record.editType).toBe('TAB_AUTOCOMPLETE')
+    expect(record.filePath).toBe('file:///test/file.ts')
   })
 
   it('should filter out human-written lines that appear in both removed and added sections', async () => {
-    uploadCursorChangesSpy.mockResolvedValue()
+    uploadTracyRecordsSpy.mockResolvedValue()
 
     const monitor = new CursorTabMonitor(
       {
@@ -131,13 +155,16 @@ describe('CursorTabMonitor', () => {
       contentChanges: [{ text: expectedAdditions }],
     } as unknown as vscode.TextDocumentChangeEvent)
 
-    // Upload is scheduled via a Promise chain; allow it to be queued.
+    // Upload is scheduled via a Promise chain (getNormalizedRepoUrl → uploadTracyRecords).
+    // Two microtask ticks needed for the .then() chain to resolve.
+    await setTimeout(0)
     await setTimeout(0)
 
-    expect(uploadCursorChangesSpy).toHaveBeenCalledOnce()
+    expect(uploadTracyRecordsSpy).toHaveBeenCalledOnce()
 
-    const change = uploadCursorChangesSpy.mock.calls.at(0)?.at(0)?.at(0)
+    const record = uploadTracyRecordsSpy.mock.calls.at(0)?.at(0)?.at(0)
     // The first line should be filtered out because it appears in both - and +
-    expect(change.additions).toBe(expectedAdditions)
+    expect(record.additions).toBe(expectedAdditions)
+    expect(record.editType).toBe('TAB_AUTOCOMPLETE')
   })
 })

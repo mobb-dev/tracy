@@ -5,29 +5,34 @@ import * as vscode from 'vscode'
 import { BaseMonitor } from '../shared/IMonitor'
 import { logger } from '../shared/logger'
 import { AppType } from '../shared/repositoryInfo'
-import { startupTimestamp } from '../shared/startupTimestamp'
-import { uploadCursorChanges } from '../shared/uploader'
-import { getCompletedFileEditBubblesSince } from './db'
-import { processBubbles } from './processor'
+import { uploadCursorRawRecords } from '../shared/uploader'
+import { getRecentBubbleKeys, prefetchSessions } from './db'
+import {
+  cleanupStaleCursors,
+  type CursorRawRecord,
+  discoverActiveSessions,
+  getCursorRowId,
+  getIncompleteBubbleKeys,
+  prepareSessionForUpload,
+  revisitIncompleteBubbles,
+  updateIncompleteBubbles,
+} from './rawProcessor'
 
 const DEFAULT_POLLING_INTERVAL = 20_000
 const BASE_POLLING_INTERVAL = process.env.MOBB_TRACER_POLL_INTERVAL_MS
   ? Number(process.env.MOBB_TRACER_POLL_INTERVAL_MS)
   : DEFAULT_POLLING_INTERVAL
 const MAX_POLLING_INTERVAL = BASE_POLLING_INTERVAL * 6
-const BATCH_SIZE = 10
-const QUERY_LIMIT = 50
+const RECENT_DISCOVERY_LIMIT = 500
 const CIRCUIT_BREAKER_THRESHOLD = 5
 const CIRCUIT_BREAKER_COOLDOWN = 120_000
+const MAX_SESSIONS_PER_CYCLE = 5
 
 export class CursorMonitor extends BaseMonitor {
   readonly name = 'CursorMonitor'
 
-  private startupTimestamp: Date
-  private oldRowsLen = -1
   private pollingPromise: Promise<void> | null = null
   private abortController: AbortController | null = null
-  private lastPollTimestamp: string | null = null
   private consecutiveFailures = 0
   private currentInterval = BASE_POLLING_INTERVAL
 
@@ -36,7 +41,6 @@ export class CursorMonitor extends BaseMonitor {
     appType: AppType
   ) {
     super(appType)
-    this.startupTimestamp = startupTimestamp
   }
 
   async start(): Promise<void> {
@@ -47,11 +51,8 @@ export class CursorMonitor extends BaseMonitor {
 
     logger.debug(`Starting ${this.name}`)
 
-    // No startup scan needed — the incremental query only fetches rows
-    // created after startupTimestamp, and processBubbles also filters by
-    // createdAt < startupTimestamp as a safety net. Old bubbles are never
-    // re-uploaded regardless.
-    this.lastPollTimestamp = this.startupTimestamp.toISOString()
+    // Clean up stale cursor keys from configStore on startup
+    cleanupStaleCursors()
 
     this._isRunning = true
     this.abortController = new AbortController()
@@ -77,7 +78,6 @@ export class CursorMonitor extends BaseMonitor {
       try {
         await this.pollingPromise
       } catch (err) {
-        // Ignore abort errors
         if (err instanceof Error && err.name !== 'AbortError') {
           logger.error({ err }, `Error while stopping ${this.name}`)
         }
@@ -119,48 +119,94 @@ export class CursorMonitor extends BaseMonitor {
           this.consecutiveFailures = CIRCUIT_BREAKER_THRESHOLD - 1
         }
 
-        // Use incremental query with time filter + limit
-        const sinceIso =
-          this.lastPollTimestamp || this.startupTimestamp.toISOString()
-        const rows = await getCompletedFileEditBubblesSince(
-          sinceIso,
-          QUERY_LIMIT
+        // 1. Discover active sessions (recent keys + persisted cursors)
+        const recentKeys = await getRecentBubbleKeys(RECENT_DISCOVERY_LIMIT)
+        const allSessionIds = discoverActiveSessions(recentKeys)
+        const sessionIds = allSessionIds.slice(0, MAX_SESSIONS_PER_CYCLE)
+
+        // 2. Prefetch: batch-fetch all sessions in a single worker call
+        //    (single DB connection open/close = single lock acquisition)
+        const prefetchedSessions = await prefetchSessions(
+          sessionIds.map((composerId) => ({
+            composerId,
+            afterRowId: getCursorRowId(composerId),
+            incompleteBubbleKeys: getIncompleteBubbleKeys(composerId),
+          }))
         )
 
-        const { changes, latestTimestamp, hasMore } = await processBubbles(
-          rows,
-          this.startupTimestamp,
-          BATCH_SIZE
-        )
+        // 3. Process: prepare records in-memory (zero DB access)
+        const allRecords: CursorRawRecord[] = []
+        const allIncomplete = new Map<
+          string,
+          { key: string; firstSeenAt: number }[]
+        >()
+        const maxRowIds = new Map<string, number>()
+        for (const {
+          composerId,
+          bubbles,
+          composerDataValue,
+          revisitedBubbles,
+        } of prefetchedSessions) {
+          // Process new bubbles
+          const { records, newIncomplete, maxRowId } = prepareSessionForUpload(
+            bubbles,
+            composerId,
+            composerDataValue
+          )
+          allRecords.push(...records)
+          if (maxRowId != null) {
+            maxRowIds.set(composerId, maxRowId)
+          }
 
-        // Update high-water mark
-        if (latestTimestamp) {
-          this.lastPollTimestamp = latestTimestamp
+          // Revisit previously-incomplete bubbles
+          const sessionIncomplete = [...newIncomplete]
+          if (revisitedBubbles.length > 0) {
+            const revisited = revisitIncompleteBubbles(
+              revisitedBubbles,
+              composerId,
+              composerDataValue
+            )
+            allRecords.push(...revisited.records)
+            sessionIncomplete.push(...revisited.stillIncomplete)
+          }
+
+          // Track merged incomplete list (or empty to clear)
+          allIncomplete.set(composerId, sessionIncomplete)
         }
 
-        // Success: reset backoff
+        if (allRecords.length === 0) {
+          logger.debug(
+            { heartbeat: true },
+            `poll: ${sessionIds.length} sessions, 0 records`
+          )
+        }
+
+        // 4. Upload all records in a single batch
+        if (allRecords.length > 0) {
+          logger.info(
+            { heartbeat: true },
+            `Uploading ${allRecords.length} record(s) from ${sessionIds.length} session(s)`
+          )
+          await uploadCursorRawRecords(allRecords, allIncomplete, maxRowIds)
+        }
+
+        // 5. Update incomplete bubble lists for sessions not handled in step 4
+        const uploadedSessionIds = new Set(
+          allRecords.map((r) => r.metadata.sessionId)
+        )
+        for (const [composerId, incomplete] of allIncomplete) {
+          if (!uploadedSessionIds.has(composerId)) {
+            updateIncompleteBubbles(
+              composerId,
+              incomplete,
+              maxRowIds.get(composerId)
+            )
+          }
+        }
+
+        // Success: reset backoff after upload completes
         this.consecutiveFailures = 0
         this.currentInterval = BASE_POLLING_INTERVAL
-
-        // Log to Datadog only when row count changes or changes found
-        if (this.oldRowsLen !== rows.length || changes.length > 0) {
-          this.oldRowsLen = rows.length
-          logger.info(`Found ${rows.length} rows, ${changes.length} changes`)
-        }
-
-        // Heartbeat: separate ring buffer so idle polls don't push out operational logs
-        logger.info(
-          { heartbeat: true, data: { hasMore } },
-          `poll: ${rows.length} rows, ${changes.length} changes`
-        )
-
-        if (changes.length > 0) {
-          logger.info(
-            { data: { rows: rows.length } },
-            `Processed ${changes.length} change(s)${hasMore ? ' (more pending)' : ''}`
-          )
-          await uploadCursorChanges(changes)
-        }
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {
           break
@@ -191,9 +237,5 @@ export class CursorMonitor extends BaseMonitor {
         }
       }
     }
-  }
-
-  getStartupTimestamp(): Date {
-    return this.startupTimestamp
   }
 }

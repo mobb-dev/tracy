@@ -42,7 +42,7 @@ ENV DISPLAY=:99
 # Install Node.js 22 (matching your project requirement)
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs && \
-    npm install -g npm@latest pnpm
+    npm install -g pnpm
 
 # Cache-bust argument to force fresh Cursor download
 # Pass --build-arg CURSOR_CACHE_BUST=$(date +%s) to force re-download

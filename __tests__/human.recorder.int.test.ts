@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { HumanRecorder } from '../src/human/recorder'
 import type { Segment } from '../src/human/segmenter'
 import { SegmentClassification } from '../src/human/types'
-import { uploadAiBlameHandlerFromExtension } from '../src/mobbdev_src/args/commands/upload_ai_blame'
 import { AppType } from '../src/shared/repositoryInfo'
 
 // Hoisted containers to satisfy Vitest mock hoisting
@@ -14,6 +13,7 @@ const h = vi.hoisted(() => {
       fileName: string
       lineAt: (ln: number) => { text: string }
     }>,
+    uploadTracyRecordsMock: vi.fn().mockResolvedValue(undefined),
   }
 })
 
@@ -47,7 +47,6 @@ vi.mock('../src/shared/repositoryInfo', async (importOriginal) => {
   }
 })
 
-// Stub logger to avoid requiring initLogger/output channel in these tests.
 vi.mock('../src/shared/logger', () => ({
   initLogger: vi.fn(),
   logger: {
@@ -61,6 +60,7 @@ vi.mock('../src/shared/config', () => ({
   getConfig: vi.fn().mockReturnValue({
     apiUrl: 'https://api.mobb.ai/v1/graphql',
     webAppUrl: 'https://app.mobb.ai',
+    extensionVersion: '0.1.0',
   }),
 }))
 
@@ -77,17 +77,9 @@ vi.mock('../src/human/config', async () => {
   }
 })
 
-vi.mock('../src/mobbdev_src/args/commands/upload_ai_blame', () => ({
-  uploadAiBlameHandlerFromExtension: vi.fn().mockResolvedValue({
-    promptsCounts: {
-      detections: { total: 0, high: 0, medium: 0, low: 0 },
-    },
-    inferenceCounts: {
-      detections: { total: 0, high: 0, medium: 0, low: 0 },
-    },
-    promptsUUID: 'test-prompts-uuid',
-    inferenceUUID: 'test-inference-uuid',
-  }),
+// Mock uploadTracyRecords used by the human uploader
+vi.mock('../src/shared/uploader', () => ({
+  uploadTracyRecords: (...args: unknown[]) => h.uploadTracyRecordsMock(...args),
 }))
 
 function makeSegment(textContent: string): Segment {
@@ -112,7 +104,6 @@ beforeEach(() => {
 
 describe('HumanRecorder integration (current implementation)', () => {
   it('uploads immediately when uploadEnabled=true and above non-whitespace threshold', async () => {
-    // Long line to exceed the default non-whitespace threshold (28 chars).
     const text = 'abcdefghijklmnopqrstuvwxyz1234567890\n'
     const recorder = new HumanRecorder({
       uploadEnabled: true,
@@ -122,20 +113,15 @@ describe('HumanRecorder integration (current implementation)', () => {
     const seg = makeSegment(text)
     await recorder.record(seg, SegmentClassification.HUMAN_POSITIVE)
 
-    const uploaderMock = vi.mocked(uploadAiBlameHandlerFromExtension)
     await vi.waitFor(() => {
-      expect(uploaderMock).toHaveBeenCalledTimes(1)
+      expect(h.uploadTracyRecordsMock).toHaveBeenCalledTimes(1)
     })
-    const args = uploaderMock.mock.calls[0]![0] as {
-      model: string
-      tool: string
-      prompts: Array<{ type: string }>
-      inference: string
-    }
-    expect(args.model).toBe('human')
-    expect(args.tool).toBe('VSCode')
-    expect(args.prompts?.[0]?.type).toBe('TOOL_EXECUTION')
-    expect(args.inference).toContain('abcdefghijklmnopqrstuvwxyz1234567890')
+    const records = h.uploadTracyRecordsMock.mock.calls[0]![0]
+    expect(records).toHaveLength(1)
+    const record = records[0]
+    expect(record.platform).toBe('CLAUDE_CODE') // VSCode maps to CLAUDE_CODE
+    expect(record.editType).toBe('HUMAN_EDIT')
+    expect(record.additions).toContain('abcdefghijklmnopqrstuvwxyz1234567890')
   })
 
   it('logs artifacts but does not upload when uploadEnabled=false (dry-run)', () => {
@@ -148,8 +134,7 @@ describe('HumanRecorder integration (current implementation)', () => {
     const seg = makeSegment(text)
     void recorder.record(seg, SegmentClassification.HUMAN_POSITIVE)
 
-    const uploaderMock = vi.mocked(uploadAiBlameHandlerFromExtension)
-    expect(uploaderMock).not.toHaveBeenCalled()
+    expect(h.uploadTracyRecordsMock).not.toHaveBeenCalled()
   })
 
   it('does not upload when below minSegmentCharsWithNoWhitespace', () => {
@@ -162,10 +147,6 @@ describe('HumanRecorder integration (current implementation)', () => {
     const seg = makeSegment(text)
     void recorder.record(seg, SegmentClassification.HUMAN_POSITIVE)
 
-    const uploaderMock = vi.mocked(uploadAiBlameHandlerFromExtension)
-    expect(uploaderMock).not.toHaveBeenCalled()
+    expect(h.uploadTracyRecordsMock).not.toHaveBeenCalled()
   })
-
-  // Non-human classifications are filtered earlier in the pipeline (index.ts).
-  // HumanRecorder assumes it is only called with HUMAN segment classifications.
 })

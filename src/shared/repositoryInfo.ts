@@ -1,4 +1,5 @@
 import * as fs from 'node:fs'
+import * as fsPromises from 'node:fs/promises'
 import * as path from 'node:path'
 import { setTimeout } from 'node:timers/promises'
 
@@ -527,6 +528,49 @@ export function getRelevantRepo(filePath?: string): GitRepository | null {
  * For multi-repo workspaces, returns the repository matching the given filePath.
  * If no repo is found for the given filePath, triggers a rescan to detect newly added repositories.
  */
+/**
+ * Discover a git repository from a file path by running git CLI commands
+ * from the file's directory. Handles worktrees and repos outside workspace
+ * folders. If found, adds the repo to the in-memory repoInfo list so
+ * subsequent lookups are fast.
+ */
+async function discoverRepoFromFilePath(
+  filePath: string
+): Promise<GitRepository | null> {
+  try {
+    const stat = await fsPromises.stat(filePath)
+    const dir = stat.isDirectory() ? filePath : path.dirname(filePath)
+
+    const gitService = new GitService(dir)
+    const isRepo = await gitService.isGitRepository()
+    if (!isRepo) {
+      return null
+    }
+
+    const gitRoot = await gitService.getGitRoot()
+    const gitUrl = await gitService.getRemoteUrl()
+    if (!gitUrl) {
+      return null
+    }
+
+    const repo: GitRepository = { gitRoot, gitRepoUrl: gitUrl }
+
+    // Add to in-memory list so future lookups don't need git CLI
+    if (repoInfo) {
+      const exists = repoInfo.repositories.some((r) => r.gitRoot === gitRoot)
+      if (!exists) {
+        repoInfo.repositories.push(repo)
+        logger.info(`Discovered repo from file path: ${gitRoot} → ${gitUrl}`)
+      }
+    }
+
+    return repo
+  } catch (err) {
+    logger.error({ err }, `Failed to discover repo from file path: ${filePath}`)
+    return null
+  }
+}
+
 export async function getNormalizedRepoUrl(
   filePath?: string
 ): Promise<string | null> {
@@ -544,13 +588,13 @@ export async function getNormalizedRepoUrl(
 
       if (repo) {
         logger.info(`Found repository after refresh: ${repo.gitRoot}`)
-      } else {
-        logger.warn(
-          `Still no git repository found for file path after refresh: ${filePath}`
-        )
       }
-    } else {
-      logger.warn('Failed to refresh repositories')
+    }
+
+    // Still not found — try discovering the repo directly from the file path.
+    // Handles worktrees and repos outside the workspace folders.
+    if (!repo) {
+      repo = await discoverRepoFromFilePath(filePath)
     }
   }
 

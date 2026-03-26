@@ -15,18 +15,6 @@ export type DBRow = {
 const fixturesPath = path.resolve(__dirname, '../files')
 
 /**
- * File edit tool names (same as in db.ts)
- */
-const FILE_EDIT_TOOLS = [
-  'search_replace',
-  'apply_patch',
-  'write',
-  'edit_file',
-  'edit_file_v2',
-  'MultiEdit',
-]
-
-/**
  * Copy a DB file from fixtures to use as state.vscdb
  */
 export function copyDbFile(srcName: string, destName: string): void {
@@ -72,47 +60,47 @@ export function readRowsByLike({
 }
 
 /**
- * Read file edit bubbles from test database using sqlite3 CLI.
- * Mirrors the getCompletedFileEditBubbles function from db.ts
+ * Read all recent bubbles from test database.
+ * Mirrors getRecentBubbles from db.ts (returns all bubbles — window filtering
+ * is not meaningful in tests since fixture timestamps are fixed).
  */
-export function readCompletedFileEditBubbles(): DBRow[] {
+export function readRecentBubbles(): DBRow[] {
   const dbPath = getTestDbPath()
-
   if (!fs.existsSync(dbPath)) {
     return []
   }
 
-  const toolNamesIn = FILE_EDIT_TOOLS.map((t) => `'${t}'`).join(', ')
-
-  const sql = `
-    SELECT key, value FROM cursorDiskKV
-    WHERE key LIKE 'bubbleId:%'
-    AND json_extract(value, '$.toolFormerData.name') IN (${toolNamesIn})
-  `
-    .replace(/\n/g, ' ')
-    .trim()
-
+  const sql = `SELECT key, value FROM cursorDiskKV WHERE key LIKE 'bubbleId:%' ORDER BY json_extract(value, '$.createdAt') ASC`
   return executeQuery(dbPath, sql)
 }
 
 /**
- * Read multiple bubble rows by exact keys using a single sqlite3 query.
- * Much faster than calling readRowsByLike per key (avoids N subprocess spawns).
+ * Read all bubbles for a given composerId.
+ * Mirrors getSessionBubbles from db.ts.
  */
-export function readBubblesByKeys(keys: string[]): DBRow[] {
-  if (keys.length === 0) {
-    return []
-  }
-
+export function readSessionBubbles(composerId: string): DBRow[] {
   const dbPath = getTestDbPath()
   if (!fs.existsSync(dbPath)) {
     return []
   }
 
-  const keysIn = keys.map((k) => `'${escapeSQL(k)}'`).join(', ')
-  const sql = `SELECT key, value FROM cursorDiskKV WHERE key IN (${keysIn})`
-
+  const sql = `SELECT key, value FROM cursorDiskKV WHERE key LIKE 'bubbleId:${escapeSQL(composerId)}:%' ORDER BY json_extract(value, '$.createdAt') ASC`
   return executeQuery(dbPath, sql)
+}
+
+/**
+ * Read composerData value for a given composerId.
+ * Mirrors getComposerDataValue from db.ts.
+ */
+export function readComposerDataValue(composerId: string): string | undefined {
+  const dbPath = getTestDbPath()
+  if (!fs.existsSync(dbPath)) {
+    return undefined
+  }
+
+  const sql = `SELECT value FROM cursorDiskKV WHERE key = 'composerData:${escapeSQL(composerId)}'`
+  const rows = executeQuery(dbPath, sql)
+  return rows[0]?.value
 }
 
 /**

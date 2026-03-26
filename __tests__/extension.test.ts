@@ -2,22 +2,18 @@ import * as path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { resetProcessedBubbles } from '../src/cursor/processor'
 // Import activate AFTER setting up mocks
 import { activate } from '../src/extension'
-import * as upload_ai_blame from '../src/mobbdev_src/args/commands/upload_ai_blame'
-import * as ts from '../src/shared/startupTimestamp'
 import {
   cleanupTestDb,
   copyDbFile,
-  readBubblesByKeys,
-  readCompletedFileEditBubbles,
+  readComposerDataValue,
+  readRecentBubbles,
+  readSessionBubbles,
 } from './helpers/testDbReader'
 
 /** Small delay to let async activation complete before copying target DB */
 const ACTIVATION_SETTLE_MS = 200
-
-// Polling interval is set in setupEnv.ts (runs before module imports)
 
 // Mock @vscode/sqlite3 BEFORE any imports that use it
 vi.mock('@vscode/sqlite3', () => ({
@@ -43,7 +39,7 @@ vi.mock('vscode', () => {
           globalValue: undefined,
         })),
       })),
-      onDidChangeConfiguration: undefined, // Checked in extension.ts line 82
+      onDidChangeConfiguration: undefined,
       onDidChangeTextDocument: vi.fn(() => ({ dispose: vi.fn() })),
     },
     env: {
@@ -109,32 +105,57 @@ vi.mock('../src/shared/logger', () => {
   }
 })
 
-// Mock Configstore
+// Mock Configstore (npm package) — needed by AuthManager and other consumers
 vi.mock('configstore', () => ({
   default: vi.fn().mockImplementation(() => ({
-    get: vi.fn(() => 'test-api-token'),
+    get: vi.fn(() => undefined),
     set: vi.fn(),
     delete: vi.fn(),
+    all: {},
   })),
+}))
+
+// Mock ConfigStoreService directly — the singleton is created at module load time,
+// so mocking the npm package alone isn't sufficient to control the configStore export.
+// Use vi.hoisted so the object is available when the hoisted vi.mock factory runs.
+const { mockConfigStore } = vi.hoisted(() => ({
+  mockConfigStore: {
+    get: vi.fn(() => undefined),
+    set: vi.fn(),
+    delete: vi.fn(),
+    all: {} as Record<string, unknown>,
+  },
+}))
+vi.mock('../src/mobbdev_src/utils/ConfigStoreService', () => ({
+  configStore: mockConfigStore,
 }))
 
 // Create a mock GQL client
 const createMockGQLClient = () => ({
-  uploadAIBlameInferencesInitRaw: vi.fn(async () => ({
-    uploadAIBlameInferencesInit: {
-      uploadSessions: [],
-    },
+  uploadTracyRecords: vi.fn(async () => ({
+    uploadTracyRecords: { status: 'OK', error: null },
   })),
-  finalizeAIBlameInferencesUploadRaw: vi.fn(async () => ({
-    finalizeAIBlameInferencesUpload: { status: 'OK', error: null },
+  getTracyRawDataUploadUrl: vi.fn(async () => ({
+    getTracyRawDataUploadUrl: {
+      status: 'OK',
+      error: null,
+      url: 'http://mock-s3-url',
+      uploadFieldsJSON: '{}',
+      keyPrefix: 'test-prefix/',
+    },
   })),
   verifyApiConnection: vi.fn(async () => true),
   validateUserToken: vi.fn(async () => 'test-user'),
 })
 
-// Mock getAuthenticatedGQLClient directly (used by extension activation/upload path)
+// Mock getAuthenticatedGQLClient directly
 vi.mock('../src/mobbdev_src/commands/handleMobbLogin', () => ({
   getAuthenticatedGQLClient: vi.fn(async () => createMockGQLClient()),
+}))
+
+// Mock uploadFile (S3 presigned URL upload)
+vi.mock('../src/mobbdev_src/features/analysis/upload-file', () => ({
+  uploadFile: vi.fn(async () => undefined),
 }))
 
 // Mock GQLClient
@@ -153,8 +174,11 @@ vi.mock(
 )
 
 // Mock gqlClientFactory
+const mockGQLClient = createMockGQLClient()
 vi.mock('../src/shared/gqlClientFactory', () => ({
-  createGQLClient: vi.fn(async () => createMockGQLClient()),
+  createGQLClient: vi.fn(async () => mockGQLClient),
+  invalidateOnAuthError: vi.fn(),
+  invalidateGQLClient: vi.fn(),
 }))
 
 // Mock handleMobbLogin
@@ -162,39 +186,20 @@ vi.mock('../src/mobbdev_src/commands', () => ({
   handleMobbLogin: vi.fn(async ({ authManager }) => authManager.getGQLClient()),
 }))
 
-// Mock the startupTimestamp to a fixed date for testing
-vi.spyOn(ts, 'startupTimestamp', 'get').mockReturnValue(
-  new Date('2024-01-01T00:00:00Z')
-)
-
-// Mock uploadAiBlameHandlerFromExtension to prevent actual implementation from running
-const uploadAiBlameHandlerFromExtensionSpy = vi
-  .spyOn(upload_ai_blame, 'uploadAiBlameHandlerFromExtension')
-  .mockResolvedValue({
-    promptsCounts: {
-      detections: { total: 0, high: 0, medium: 0, low: 0 },
-    },
-    inferenceCounts: {
-      detections: { total: 0, high: 0, medium: 0, low: 0 },
-    },
-    promptsUUID: 'test-prompts-uuid',
-    inferenceUUID: 'test-inference-uuid',
-  })
-
 // Track mock function calls
 const initDBMock = vi.fn().mockResolvedValue(undefined)
 const closeDBMock = vi.fn().mockResolvedValue(undefined)
-const getCompletedFileEditBubblesSinceMock = vi.fn()
-const getBubblesByKeysMock = vi.fn().mockResolvedValue([])
+const getRecentBubbleKeysMock = vi.fn()
+const prefetchSessionsMock = vi.fn()
 
 // Mock db module - uses test helper to read real data
 vi.mock('../src/cursor/db', () => ({
   initDB: () => initDBMock(),
   closeDB: () => closeDBMock(),
-  getCompletedFileEditBubblesSince: (sinceIso: string, limit: number) =>
-    getCompletedFileEditBubblesSinceMock(sinceIso, limit),
-  getBubblesByKeys: (keys: string[]) => getBubblesByKeysMock(keys),
-  releaseConnection: vi.fn().mockResolvedValue(undefined),
+  getRecentBubbleKeys: (limit: number) => getRecentBubbleKeysMock(limit),
+  prefetchSessions: (
+    sessions: { composerId: string; afterTimestamp?: string }[]
+  ) => prefetchSessionsMock(sessions),
 }))
 
 // Mock repositoryInfo to return valid test data
@@ -221,22 +226,12 @@ vi.mock('../src/shared/repositoryInfo', async () => {
     ...actual,
     repoInfo: mockRepoInfo,
     initRepoInfo: vi.fn(async () => {
-      // Set the mocked repoInfo
       return mockRepoInfo
     }),
     getRepositoryInfo: vi.fn(async () => mockRepoInfo),
-  }
-})
-
-// Mock uploader to prevent auth calls during activation
-// Use partial mock to keep uploadCursorChanges real so it calls the spied uploadAiBlameHandlerFromExtension
-vi.mock('../src/shared/uploader', async () => {
-  const actual = await vi.importActual<typeof import('../src/shared/uploader')>(
-    '../src/shared/uploader'
-  )
-  return {
-    ...actual,
-    getAuthenticatedForUpload: vi.fn(async () => undefined),
+    getNormalizedRepoUrl: vi
+      .fn()
+      .mockResolvedValue('https://github.com/test/repo'),
   }
 })
 
@@ -260,6 +255,7 @@ vi.mock('../src/shared/config', () => ({
     apiUrl: 'https://api.mobb.ai/v1/graphql',
     webAppUrl: 'https://app.mobb.ai',
     isDevExtension: false,
+    extensionVersion: '0.1.0',
     sanitizeData: false,
   })),
   hasRelevantConfigurationChanged: vi.fn(() => false),
@@ -291,12 +287,13 @@ vi.mock('../src/ui/TracyStatusBar', () => ({
 }))
 
 beforeEach(() => {
-  resetProcessedBubbles()
   initDBMock.mockClear()
   closeDBMock.mockClear()
-  getCompletedFileEditBubblesSinceMock.mockClear()
-  getBubblesByKeysMock.mockClear()
-  uploadAiBlameHandlerFromExtensionSpy.mockClear()
+  getRecentBubbleKeysMock.mockClear()
+  prefetchSessionsMock.mockClear()
+  mockGQLClient.uploadTracyRecords.mockClear()
+  mockConfigStore.get.mockReturnValue(undefined)
+  mockConfigStore.set.mockClear()
 })
 
 afterEach(() => {
@@ -312,9 +309,7 @@ describe('extension tests', () => {
     initialDbFile: string
     targetDbFile: string
     minPollCalls: number
-    minUploadAiBlameCalls: number
-    pollCallsToSnapshot: number
-    uploadCallsToSnapshot: number
+    minUploadCalls: number
   }
 
   const testCases: TestCase[] = [
@@ -323,40 +318,43 @@ describe('extension tests', () => {
       initialDbFile: 'empty-state.vscdb',
       targetDbFile: 'full-state.vscdb',
       minPollCalls: 1,
-      minUploadAiBlameCalls: 1,
-      pollCallsToSnapshot: 1,
-      uploadCallsToSnapshot: 1,
+      minUploadCalls: 1,
     },
     {
       name: 'full database scenario with thinking models',
       initialDbFile: 'empty-state.vscdb',
       targetDbFile: 'full-thinking-state.vscdb',
       minPollCalls: 1,
-      minUploadAiBlameCalls: 1,
-      pollCallsToSnapshot: 1,
-      uploadCallsToSnapshot: 1,
+      minUploadCalls: 1,
     },
   ]
 
   it.each(testCases)(
     '$name',
-    async ({
-      initialDbFile,
-      targetDbFile,
-      minPollCalls,
-      minUploadAiBlameCalls,
-      pollCallsToSnapshot,
-      uploadCallsToSnapshot,
-    }) => {
+    async ({ initialDbFile, targetDbFile, minPollCalls, minUploadCalls }) => {
       // Set up initial empty database
       copyDbFile(initialDbFile, 'state.vscdb')
 
       // Configure mocks to use test helper reading from real .vscdb files
-      getCompletedFileEditBubblesSinceMock.mockImplementation(() =>
-        Promise.resolve(readCompletedFileEditBubbles())
+      getRecentBubbleKeysMock.mockImplementation(() =>
+        Promise.resolve(readRecentBubbles())
       )
-      getBubblesByKeysMock.mockImplementation((keys: string[]) =>
-        Promise.resolve(readBubblesByKeys(keys))
+      prefetchSessionsMock.mockImplementation(
+        (
+          sessions: {
+            composerId: string
+            afterRowId?: number
+            incompleteBubbleKeys?: string[]
+          }[]
+        ) =>
+          Promise.resolve(
+            sessions.map(({ composerId }) => ({
+              composerId,
+              bubbles: readSessionBubbles(composerId),
+              composerDataValue: readComposerDataValue(composerId),
+              revisitedBubbles: [],
+            }))
+          )
       )
 
       const currentPath = __dirname
@@ -375,46 +373,33 @@ describe('extension tests', () => {
       await vi.waitFor(
         () => {
           expect(
-            getCompletedFileEditBubblesSinceMock.mock.calls.length
+            getRecentBubbleKeysMock.mock.calls.length
           ).toBeGreaterThanOrEqual(minPollCalls)
         },
         { timeout: 30000 }
       )
 
-      // Snapshot polling results
-      for (
-        let i = 0;
-        i <
-        Math.min(
-          pollCallsToSnapshot,
-          getCompletedFileEditBubblesSinceMock.mock.results.length
-        );
-        i++
-      ) {
-        const callReturnValue =
-          await getCompletedFileEditBubblesSinceMock.mock.results[i].value
-        expect(callReturnValue).toMatchSnapshot(
-          `${targetDbFile}-poll-result-${i + 1}`
-        )
-      }
-
       // Wait for upload to be triggered
       await vi.waitFor(
         () => {
           expect(
-            uploadAiBlameHandlerFromExtensionSpy.mock.calls.length
-          ).toBeGreaterThanOrEqual(minUploadAiBlameCalls)
+            mockGQLClient.uploadTracyRecords.mock.calls.length
+          ).toBeGreaterThanOrEqual(minUploadCalls)
         },
         { timeout: 20000 }
       )
 
-      // Snapshot upload call arguments
-      for (let i = 0; i < uploadCallsToSnapshot; i++) {
-        const uploadCallArguments =
-          uploadAiBlameHandlerFromExtensionSpy.mock.calls[i]
-        expect(uploadCallArguments).toMatchSnapshot(
-          `${targetDbFile}-uploadAiBlame-call-${i}`
-        )
+      // Verify tracy record shape
+      const uploadCall = mockGQLClient.uploadTracyRecords.mock.calls[0][0]
+      const { records } = uploadCall
+      expect(records.length).toBeGreaterThan(0)
+
+      for (const record of records) {
+        expect(record.platform).toBe('CURSOR')
+        expect(record.recordId).toBeDefined()
+        expect(record.recordTimestamp).toBeDefined()
+        // Raw records should have rawDataS3Key (uploaded to S3 via presigned URL)
+        expect(record.rawDataS3Key).toBeDefined()
       }
     },
     TEST_TIMEOUT_MS

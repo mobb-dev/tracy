@@ -56,7 +56,7 @@ ENV DISPLAY=:99
 # Install Node.js 22 (matching your project requirement)
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs && \
-    npm install -g npm@latest pnpm
+    npm install -g pnpm
 
 # Download and install VS Code - ALWAYS GET LATEST STABLE VERSION
 # Using Microsoft package repository to auto-select correct architecture and get latest version
