@@ -1,7 +1,7 @@
 {
   "name": "mobb-ai-tracer",
   "displayName": "Mobb Tracy",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "repository": "https://github.com/mobb-dev/tracy",
   "publisher": "Mobb",
   "icon": "icon.png",
@@ -66,7 +66,7 @@
     "package:dev:prod": "./package-dev.sh --env prod",
     "package:dev:uninstall": "code --uninstall-extension Mobb.mobb-ai-tracer-dev 2>/dev/null; cursor --uninstall-extension Mobb.mobb-ai-tracer-dev 2>/dev/null; echo 'Dev extension uninstalled'"
   },
-  "Readme comment dependencies": "IMPORTANT: We must use exact versions in the dependencies because vcse bundler only works with npm correctly. pnpm is not supported.",
+  "Readme comment dependencies": "IMPORTANT: We must use exact versions in the dependencies because vcse bundler only works with npm correctly. pnpm is not supported. NOTE: p-limit must stay at v3 — v4+ is ESM-only and this extension compiles to CommonJS.",
   "dependencies": {
     "@gitbeaker/requester-utils": "43.8.0",
     "@gitbeaker/rest": "43.8.0",
@@ -105,7 +105,7 @@
     "node-stream-zip": "1.15.0",
     "octokit": "3.2.1",
     "open": "8.4.2",
-    "p-limit": "5.0.0",
+    "p-limit": "3.1.0",
     "parse-diff": "0.11.1",
     "pino": "9.7.0",
     "pino-pretty": "13.0.0",
