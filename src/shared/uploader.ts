@@ -57,7 +57,8 @@ export async function uploadTracyRecords(
 export async function uploadCursorRawRecords(
   records: CursorRawRecord[],
   incompleteBubbles?: Map<string, { key: string; firstSeenAt: number }[]>,
-  maxRowIds?: Map<string, number>
+  maxRowIds?: Map<string, number>,
+  bubblesLimit?: number
 ): Promise<{ uploaded: number }> {
   if (records.length === 0) {
     return { uploaded: 0 }
@@ -132,7 +133,8 @@ export async function uploadCursorRawRecords(
       sessionId,
       { recordId, timestamp, rowid, bubblesFetched },
     ] of lastRecordPerSession) {
-      const pending = (bubblesFetched ?? 0) >= SESSION_BUBBLES_LIMIT
+      const pending =
+        (bubblesFetched ?? 0) >= (bubblesLimit ?? SESSION_BUBBLES_LIMIT)
       // Use maxRowId (covers skipped bubbles) if available, else record's rowid
       const effectiveRowId = maxRowIds?.get(sessionId) ?? rowid
       try {

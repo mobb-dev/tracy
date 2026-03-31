@@ -91,7 +91,9 @@ function execute<T>(fn: (conn: InstanceType<typeof DatabaseSync>) => T): T {
   }
 }
 
-const SESSION_BUBBLES_LIMIT: number = sessionBubblesLimit ?? 100
+// Safety fallback — must match SESSION_BUBBLES_LIMIT in rawProcessor.ts.
+// In normal flow, bubblesLimit is always passed explicitly by CursorMonitor.
+const DEFAULT_BUBBLES_LIMIT: number = sessionBubblesLimit ?? 50
 
 /**
  * Fetch the most recent bubble keys for session discovery.
@@ -136,7 +138,11 @@ type SessionResult = {
  * Uses rowid for filtering — pure B-tree scan, no JSON parsing in SQL.
  * Also re-fetches incomplete bubbles by exact key to check if they've completed.
  */
-function prefetchSessions(sessions: SessionRequest[]): SessionResult[] {
+function prefetchSessions(
+  sessions: SessionRequest[],
+  bubblesLimit?: number
+): SessionResult[] {
+  const limit = bubblesLimit ?? DEFAULT_BUBBLES_LIMIT
   return execute((conn) => {
     const bubbleStmtWithRowId = conn.prepare(
       `SELECT rowid, key, value FROM cursorDiskKV WHERE key LIKE ? ESCAPE '\\' AND rowid > ? ORDER BY rowid ASC LIMIT ?`
@@ -157,12 +163,8 @@ function prefetchSessions(sessions: SessionRequest[]): SessionResult[] {
 
       const bubbles =
         afterRowId != null
-          ? (bubbleStmtWithRowId.all(
-              pattern,
-              afterRowId,
-              SESSION_BUBBLES_LIMIT
-            ) as DBRow[])
-          : (bubbleStmtNoRowId.all(pattern, SESSION_BUBBLES_LIMIT) as DBRow[])
+          ? (bubbleStmtWithRowId.all(pattern, afterRowId, limit) as DBRow[])
+          : (bubbleStmtNoRowId.all(pattern, limit) as DBRow[])
 
       const row = composerStmt.get(`composerData:${composerId}`) as
         | { value?: string }
@@ -208,7 +210,10 @@ parentPort?.on('message', (msg: WorkerRequest) => {
         result = getRecentBubbleKeys(params.limit as number)
         break
       case 'prefetchSessions':
-        result = prefetchSessions(params.sessions as SessionRequest[])
+        result = prefetchSessions(
+          params.sessions as SessionRequest[],
+          params.bubblesLimit as number | undefined
+        )
         break
       case 'close':
         closeConnection()

@@ -274,7 +274,8 @@ type SessionResult = {
  * Returns empty array if the worker is unavailable (graceful degradation).
  */
 export async function prefetchSessions(
-  sessions: SessionRequest[]
+  sessions: SessionRequest[],
+  bubblesLimit?: number
 ): Promise<SessionResult[]> {
   if (sessions.length === 0) {
     return []
@@ -283,5 +284,8 @@ export async function prefetchSessions(
     logger.warn('[db.ts] Worker unavailable, returning [] for prefetchSessions')
     return []
   }
-  return workerRequest<SessionResult[]>('prefetchSessions', { sessions })
+  return workerRequest<SessionResult[]>('prefetchSessions', {
+    sessions,
+    bubblesLimit,
+  })
 }

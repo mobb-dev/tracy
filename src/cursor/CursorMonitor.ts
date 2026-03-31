@@ -26,7 +26,7 @@ const MAX_POLLING_INTERVAL = BASE_POLLING_INTERVAL * 6
 const RECENT_DISCOVERY_LIMIT = 500
 const CIRCUIT_BREAKER_THRESHOLD = 5
 const CIRCUIT_BREAKER_COOLDOWN = 120_000
-const MAX_SESSIONS_PER_CYCLE = 5
+const MAX_RECORDS_PER_CYCLE = 200
 
 export class CursorMonitor extends BaseMonitor {
   readonly name = 'CursorMonitor'
@@ -121,8 +121,13 @@ export class CursorMonitor extends BaseMonitor {
 
         // 1. Discover active sessions (recent keys + persisted cursors)
         const recentKeys = await getRecentBubbleKeys(RECENT_DISCOVERY_LIMIT)
-        const allSessionIds = discoverActiveSessions(recentKeys)
-        const sessionIds = allSessionIds.slice(0, MAX_SESSIONS_PER_CYCLE)
+        const sessionIds = discoverActiveSessions(recentKeys)
+
+        // Derive per-session bubble limit so total stays within MAX_RECORDS_PER_CYCLE
+        const bubblesPerSession =
+          sessionIds.length > 0
+            ? Math.max(1, Math.floor(MAX_RECORDS_PER_CYCLE / sessionIds.length))
+            : MAX_RECORDS_PER_CYCLE
 
         // 2. Prefetch: batch-fetch all sessions in a single worker call
         //    (single DB connection open/close = single lock acquisition)
@@ -131,7 +136,8 @@ export class CursorMonitor extends BaseMonitor {
             composerId,
             afterRowId: getCursorRowId(composerId),
             incompleteBubbleKeys: getIncompleteBubbleKeys(composerId),
-          }))
+          })),
+          bubblesPerSession
         )
 
         // 3. Process: prepare records in-memory (zero DB access)
@@ -187,7 +193,12 @@ export class CursorMonitor extends BaseMonitor {
             { heartbeat: true },
             `Uploading ${allRecords.length} record(s) from ${sessionIds.length} session(s)`
           )
-          await uploadCursorRawRecords(allRecords, allIncomplete, maxRowIds)
+          await uploadCursorRawRecords(
+            allRecords,
+            allIncomplete,
+            maxRowIds,
+            bubblesPerSession
+          )
         }
 
         // 5. Update incomplete bubble lists for sessions not handled in step 4

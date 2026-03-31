@@ -37,7 +37,7 @@ type CursorValue = {
 }
 
 /** Single source of truth — also passed to dbWorker via workerData. */
-export const SESSION_BUBBLES_LIMIT = 100
+export const SESSION_BUBBLES_LIMIT = 50
 
 const STALE_KEY_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000 // 14 days
 const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000 // 1 day
