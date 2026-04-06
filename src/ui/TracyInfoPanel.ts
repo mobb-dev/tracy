@@ -273,7 +273,17 @@ export class InfoPanel implements vscode.Disposable {
     const ctx = this.getCtx()
 
     // Parse conversation from promptContent
-    const conversation = this.parseConversation(this.promptContent) ?? []
+    const parsedConversation = this.parseConversation(this.promptContent)
+    let conversation: ConversationMessage[]
+    if (parsedConversation === undefined) {
+      // parseConversation returned undefined → parse failure
+      conversation = []
+      this.conversationState = 'ERROR'
+      this.conversationError =
+        this.conversationError || 'Failed to parse conversation data'
+    } else {
+      conversation = parsedConversation
+    }
     // Get summary content
     const conversationSummary = this.conversationSummaryContent
 

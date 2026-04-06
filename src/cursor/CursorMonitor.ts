@@ -2,6 +2,7 @@ import { setTimeout } from 'node:timers/promises'
 
 import * as vscode from 'vscode'
 
+import { CircuitBreaker } from '../shared/CircuitBreaker'
 import { BaseMonitor } from '../shared/IMonitor'
 import { logger } from '../shared/logger'
 import { AppType } from '../shared/repositoryInfo'
@@ -24,8 +25,6 @@ const BASE_POLLING_INTERVAL = process.env.MOBB_TRACER_POLL_INTERVAL_MS
   : DEFAULT_POLLING_INTERVAL
 const MAX_POLLING_INTERVAL = BASE_POLLING_INTERVAL * 6
 const RECENT_DISCOVERY_LIMIT = 500
-const CIRCUIT_BREAKER_THRESHOLD = 5
-const CIRCUIT_BREAKER_COOLDOWN = 120_000
 const MAX_RECORDS_PER_CYCLE = 200
 
 export class CursorMonitor extends BaseMonitor {
@@ -33,8 +32,17 @@ export class CursorMonitor extends BaseMonitor {
 
   private pollingPromise: Promise<void> | null = null
   private abortController: AbortController | null = null
-  private consecutiveFailures = 0
-  private currentInterval = BASE_POLLING_INTERVAL
+  private breaker = new CircuitBreaker({
+    name: 'CursorMonitor',
+    threshold: 5,
+    cooldownMs: 120_000,
+    baseIntervalMs: BASE_POLLING_INTERVAL,
+    maxIntervalMs: MAX_POLLING_INTERVAL,
+    isTransientError: (err) => {
+      const msg = err.message ?? String(err)
+      return msg.includes('SQLITE_BUSY') || msg.includes('database is locked')
+    },
+  })
 
   constructor(
     private context: vscode.ExtensionContext,
@@ -91,33 +99,17 @@ export class CursorMonitor extends BaseMonitor {
   private async poll(): Promise<void> {
     while (this._isRunning && !this.abortController?.signal.aborted) {
       try {
-        // Apply jitter: ±20% of current interval
-        const jitter = this.currentInterval * 0.2 * (Math.random() * 2 - 1)
-        const delay = Math.round(this.currentInterval + jitter)
+        const { signal } = this.abortController!
 
-        await setTimeout(delay, undefined, {
-          signal: this.abortController?.signal,
+        await setTimeout(this.breaker.getDelayWithJitter(), undefined, {
+          signal,
         })
 
-        if (!this._isRunning || this.abortController?.signal.aborted) {
+        if (!this._isRunning || signal.aborted) {
           break
         }
 
-        // Circuit breaker: if too many consecutive failures, enter cooldown
-        if (this.consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD) {
-          logger.warn(
-            `${this.name} circuit breaker open (${this.consecutiveFailures} failures), cooling down ${CIRCUIT_BREAKER_COOLDOWN / 1000}s`
-          )
-          logger.info(
-            { heartbeat: true, data: { failures: this.consecutiveFailures } },
-            'circuit breaker open'
-          )
-          await setTimeout(CIRCUIT_BREAKER_COOLDOWN, undefined, {
-            signal: this.abortController?.signal,
-          })
-          // Half-open: try one probe cycle
-          this.consecutiveFailures = CIRCUIT_BREAKER_THRESHOLD - 1
-        }
+        await this.breaker.waitIfOpen(signal)
 
         // 1. Discover active sessions (recent keys + persisted cursors)
         const recentKeys = await getRecentBubbleKeys(RECENT_DISCOVERY_LIMIT)
@@ -215,37 +207,14 @@ export class CursorMonitor extends BaseMonitor {
           }
         }
 
-        // Success: reset backoff after upload completes
-        this.consecutiveFailures = 0
-        this.currentInterval = BASE_POLLING_INTERVAL
+        this.breaker.recordSuccess()
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {
           break
         }
-
-        const errMsg = err instanceof Error ? err.message : String(err)
-        const isLockError =
-          errMsg.includes('SQLITE_BUSY') ||
-          errMsg.includes('database is locked')
-
-        if (isLockError) {
-          // Transient lock contention — skip this cycle, don't penalize.
-          // Cursor is likely writing to its DB. We'll try again next cycle.
-          logger.warn({ err }, `${this.name} DB query failed, skipping cycle`)
-          logger.info({ heartbeat: true }, 'poll skipped (db locked)')
-        } else {
-          // Actual error — apply exponential backoff
-          this.consecutiveFailures++
-          this.currentInterval = Math.min(
-            BASE_POLLING_INTERVAL * Math.pow(2, this.consecutiveFailures - 1),
-            MAX_POLLING_INTERVAL
-          )
-          logger.error({ err }, `Error in ${this.name} polling`)
-          logger.info(
-            { heartbeat: true, data: { error: errMsg.slice(0, 100) } },
-            `poll error (${this.consecutiveFailures}x), next in ${Math.round(this.currentInterval / 1000)}s`
-          )
-        }
+        this.breaker.recordFailure(
+          err instanceof Error ? err : new Error(String(err))
+        )
       }
     }
   }

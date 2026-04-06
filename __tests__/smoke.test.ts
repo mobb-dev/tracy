@@ -52,6 +52,24 @@ vi.mock('../src/mobbdev_src/commands', () => ({
 
 vi.mock('vscode', () => {
   return {
+    EventEmitter: class {
+      private listeners: ((data: unknown) => void)[] = []
+      get event() {
+        return (listener: (data: unknown) => void) => {
+          this.listeners.push(listener)
+          return { dispose: () => void 0 }
+        }
+      }
+      fire(data: unknown) {
+        this.listeners.forEach((l) => l(data))
+      }
+      dispose() {
+        this.listeners = []
+      }
+    },
+    Uri: {
+      parse: (s: string) => ({ fsPath: s, toString: () => s }),
+    },
     workspace: {
       workspaceFolders: [],
       onDidChangeTextDocument: () => ({

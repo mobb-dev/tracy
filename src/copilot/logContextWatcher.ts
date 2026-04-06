@@ -1,11 +1,12 @@
-import * as fs from 'fs'
-import * as fsPromises from 'fs/promises'
-import * as os from 'os'
-import * as path from 'path'
+import * as fs from 'node:fs'
+import * as fsPromises from 'node:fs/promises'
+import * as path from 'node:path'
+
 import * as vscode from 'vscode'
 
 import { logJsonToFile } from '../shared/fileLogger'
 import { logger } from '../shared/logger'
+import { getVSCodeUserDir } from '../shared/platformPaths'
 import { LogContextRecord } from './events/LogContextRecord'
 
 export type LogContextWatcherOptions = {
@@ -36,35 +37,8 @@ export class LogContextWatcher {
    */
   private resolveLogContextPath(): string | undefined {
     try {
-      const homeDir = os.homedir()
-      if (!homeDir) {
-        logger.warn('Could not determine user home directory')
-        return undefined
-      }
-
-      // Different paths for different platforms
-      let basePath: string
-      switch (os.platform()) {
-        case 'darwin': // macOS
-          basePath = path.join(homeDir, 'Library', 'Application Support')
-          break
-        case 'win32': // Windows
-          basePath =
-            process.env.APPDATA || path.join(homeDir, 'AppData', 'Roaming')
-          break
-        case 'linux': // Linux
-          basePath =
-            process.env.XDG_CONFIG_HOME || path.join(homeDir, '.config')
-          break
-        default:
-          logger.warn(`Unsupported platform: ${os.platform()}`)
-          return undefined
-      }
-
       const logPath = path.join(
-        basePath,
-        'Code',
-        'User',
+        getVSCodeUserDir(),
         'globalStorage',
         'github.copilot-chat',
         'logContextRecordings',

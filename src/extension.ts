@@ -1,5 +1,6 @@
 import * as vscode from 'vscode'
 
+import { registerInlineCompletionTracker } from './copilot/inlineCompletionTracker'
 import { closeDB, initDB } from './cursor/db'
 import { EXTENSION_NAME } from './env'
 import { AuthManager } from './mobbdev_src/commands/AuthManager'
@@ -12,7 +13,12 @@ import {
 import { dailyMcpDetection } from './shared/DailyMcpDetection'
 import { flushLogger, initLogger, logger } from './shared/logger'
 import { MonitorManager } from './shared/MonitorManager'
-import { AppType, initRepoInfo, repoInfo } from './shared/repositoryInfo'
+import {
+  AppType,
+  initRepoInfo,
+  refreshRepositories,
+  repoInfo,
+} from './shared/repositoryInfo'
 import { TracyCoordinator } from './ui/TracyCoordinator'
 import { StatusBarView } from './ui/TracyStatusBar'
 
@@ -87,6 +93,33 @@ export async function activate(context: vscode.ExtensionContext) {
     await monitorManager.startMonitoring(
       dbInitFailed ? ['CursorMonitor'] : undefined
     )
+
+    // Track Copilot inline completion acceptances (VS Code only — Cursor has its own tab tracking)
+    if (repoInfo.appType === AppType.VSCODE) {
+      registerInlineCompletionTracker(context)
+    }
+
+    // Refresh workspace repo mapping when folders change (user adds/removes workspace folder)
+    if (vscode.workspace.onDidChangeWorkspaceFolders) {
+      context.subscriptions.push(
+        vscode.workspace.onDidChangeWorkspaceFolders(async (e) => {
+          logger.info(
+            `Workspace folders changed: +${e.added.length} -${e.removed.length}`
+          )
+          try {
+            await refreshRepositories()
+            logger.info(
+              `Repositories refreshed: ${repoInfo?.repositories.map((r) => r.gitRepoUrl).join(', ')}`
+            )
+          } catch (err) {
+            logger.warn(
+              { err },
+              'Failed to refresh repositories after workspace change'
+            )
+          }
+        })
+      )
+    }
 
     // Register configuration change listener
     // When configuration changes, we need to reload the window because:

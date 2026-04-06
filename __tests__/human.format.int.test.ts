@@ -88,6 +88,21 @@ vi.mock('../src/shared/logger', () => {
 vi.mock('vscode', () => {
   const { outputLines } = h as Hoisted
   return {
+    EventEmitter: class {
+      private listeners: ((data: unknown) => void)[] = []
+      get event() {
+        return (listener: (data: unknown) => void) => {
+          this.listeners.push(listener)
+          return { dispose: () => void 0 }
+        }
+      }
+      fire(data: unknown) {
+        this.listeners.forEach((l) => l(data))
+      }
+      dispose() {
+        this.listeners = []
+      }
+    },
     Disposable: class {
       private _cb: () => void
       constructor(cb: () => void) {

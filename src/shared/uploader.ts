@@ -1,14 +1,11 @@
+import { extractFilePathFromRecord } from '../copilot/extractFilePath'
+import type { CopilotRawRecord } from '../copilot/rawProcessor'
 import {
   type BubbleDataForFilePath,
   extractFilePath,
 } from '../cursor/extractFilePath'
 import type { CursorRawRecord } from '../cursor/rawProcessor'
 import { advanceCursor, SESSION_BUBBLES_LIMIT } from '../cursor/rawProcessor'
-import {
-  PromptItemArray,
-  uploadAiBlameHandlerFromExtension,
-  type UploadAiBlameResult,
-} from '../mobbdev_src/args/commands/upload_ai_blame'
 import {
   prepareAndSendTracyRecords,
   type TracyRecordClientInput,
@@ -20,7 +17,7 @@ import {
 import { getConfig } from './config'
 import { createGQLClient } from './gqlClientFactory'
 import { logger } from './logger'
-import { getNormalizedRepoUrl } from './repositoryInfo'
+import { getNormalizedRepoUrl, repoInfo } from './repositoryInfo'
 
 type BubbleWithTimestamp = BubbleDataForFilePath & { createdAt?: string }
 
@@ -164,74 +161,63 @@ export async function uploadCursorRawRecords(
 }
 
 /**
- * Upload Copilot changes via the legacy upload path.
- * Kept until Copilot is migrated to tracy batch uploads.
+ * Upload raw Copilot chat requests via the tracy batch pipeline.
+ * Maps CopilotRawRecord[] → TracyRecordClientInput[] with per-record repo resolution.
  */
-export async function uploadCopilotChanges(
-  prompts: PromptItemArray,
-  additions: string,
-  model: string,
-  responseTime: string,
-  blameType: AiBlameInferenceType = AiBlameInferenceType.Chat,
-  sessionId?: string,
-  filePath?: string
-) {
-  logger.info(`Uploading Copilot changes`, { sessionId })
+export async function uploadCopilotRawRecords(
+  records: CopilotRawRecord[]
+): Promise<{ uploaded: number }> {
+  if (records.length === 0) {
+    return { uploaded: 0 }
+  }
+
+  const config = getConfig()
+
+  // Cache repo URL lookups within the batch (Promise-based to avoid races)
+  const repoUrlCache = new Map<string | undefined, Promise<string | null>>()
+
+  // Attach workspace repo mapping so the server can resolve per-event repo URLs
+  const workspaceRepos = repoInfo?.repositories?.map((r) => ({
+    gitRoot: r.gitRoot,
+    gitRepoUrl: r.gitRepoUrl,
+  }))
+  const tracyRecords: TracyRecordClientInput[] = await Promise.all(
+    records.map(async (record) => {
+      const filePath = extractFilePathFromRecord(record)
+
+      if (!repoUrlCache.has(filePath)) {
+        repoUrlCache.set(filePath, getNormalizedRepoUrl(filePath))
+      }
+      const repositoryUrl = await repoUrlCache.get(filePath)!
+
+      // Inject workspace repos into rawData for server-side per-event resolution
+      const rawData: CopilotRawRecord = {
+        ...record,
+        metadata: {
+          ...record.metadata,
+          workspaceRepos,
+        },
+      }
+
+      return {
+        platform: InferencePlatform.Copilot,
+        blameType: AiBlameInferenceType.Chat,
+        recordId: record.request.requestId,
+        recordTimestamp: new Date(record.request.timestamp).toISOString(),
+        rawData,
+        repositoryUrl: repositoryUrl ?? undefined,
+        clientVersion: config.extensionVersion,
+      }
+    })
+  )
 
   try {
-    const config = getConfig()
-    const repositoryUrl = await getNormalizedRepoUrl(filePath)
-    logger.debug(
-      { filePath, repositoryUrl, sessionId },
-      'Copilot per-change repo resolution'
-    )
-    const result: UploadAiBlameResult = await uploadAiBlameHandlerFromExtension(
-      {
-        prompts,
-        inference: additions,
-        model,
-        tool: 'Copilot',
-        responseTime,
-        blameType,
-        sessionId,
-        apiUrl: config.apiUrl,
-        webAppUrl: config.webAppUrl,
-        repositoryUrl,
-        sanitize: config.sanitizeData,
-      }
-    )
-    logger.info(
-      { data: { tool: 'Copilot', model, repositoryUrl } },
-      'Inference uploaded'
-    )
-
-    logger.info(
-      {
-        event: 'copilot_upload_sanitization',
-        sanitizationEnabled: config.sanitizeData,
-        timestamp: new Date().toISOString(),
-        model,
-        tool: 'Copilot',
-        blameType,
-        sessionId,
-        promptsUUID: result.promptsUUID,
-        inferenceUUID: result.inferenceUUID,
-        promptsCounts: result.promptsCounts.detections,
-        inferenceCounts: result.inferenceCounts.detections,
-        totalDetections:
-          result.promptsCounts.detections.total +
-          result.inferenceCounts.detections.total,
-        sanitizationDurationMs: result.sanitizationDurationMs,
-      },
-      config.sanitizeData
-        ? 'Copilot upload sanitization metrics'
-        : 'Copilot upload (sanitization disabled)'
-    )
-  } catch (error) {
-    logger.error(
-      { error, model, tool: 'Copilot' },
-      'Failed to upload copilot changes'
-    )
-    throw error
+    await uploadTracyRecords(tracyRecords, {
+      sanitize: config.sanitizeData,
+    })
+    return { uploaded: records.length }
+  } catch (err) {
+    logger.error({ err }, 'Failed to upload copilot raw records')
+    throw err
   }
 }

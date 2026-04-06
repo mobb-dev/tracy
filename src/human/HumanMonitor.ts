@@ -1,6 +1,7 @@
 import * as vscode from 'vscode'
 
 import { BaseMonitor } from '../shared/IMonitor'
+import { onWillAcceptInlineCompletion } from '../shared/inlineCompletionEvents'
 import { logger } from '../shared/logger'
 import { AppType } from '../shared/repositoryInfo'
 import { HUMAN_TRACKING_CONFIG } from './config'
@@ -75,6 +76,15 @@ export class HumanTrackingSession extends BaseMonitor {
         }
       )
       this.subscriptions.push(editSub)
+
+      // Flush human segment before AI inline completion is inserted.
+      // This ensures the human-typed prefix is captured separately.
+      const inlineCompletionSub = onWillAcceptInlineCompletion(
+        async (documentUri) => {
+          await this.closeByDocURIAndRecord(documentUri)
+        }
+      )
+      this.subscriptions.push(inlineCompletionSub)
 
       const closeSub = vscode.workspace.onDidCloseTextDocument(
         async (closedDocument: vscode.TextDocument) => {

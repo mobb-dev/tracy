@@ -483,20 +483,19 @@ describe('AIBlameCache', () => {
         )
       })
 
-      it('handles prompt fetch failures gracefully', async () => {
-        ;(global.fetch as any).mockRejectedValue(new Error('Fetch failed'))
-
+      it('returns null when API returns no conversation messages (no S3 fetch)', async () => {
         const mockGqlClient = {
           getAIBlameAttributionPrompt: vi.fn().mockResolvedValue({
             getAIBlameInferenceData: {
               promptUrl: 'https://example.com/prompt.json',
+              conversationMessages: null,
             },
           }),
         }
 
-        const { getAuthenticatedGQLClient } =
-          await import('../src/mobbdev_src/commands/handleMobbLogin')
-        ;(getAuthenticatedGQLClient as any).mockResolvedValue(mockGqlClient)
+        const { createGQLClient } =
+          await import('../src/shared/gqlClientFactory')
+        ;(createGQLClient as any).mockResolvedValue(mockGqlClient)
 
         const { AIBlameCache } = await import('../src/ui/AIBlameCache')
         const { logger } = await import('../src/shared/logger')
@@ -506,12 +505,40 @@ describe('AIBlameCache', () => {
         const result = await cache.getAIBlamePrompt('attr-123')
 
         expect(result).toBeNull()
-        expect(logger.error).toHaveBeenCalledWith(
-          expect.objectContaining({
-            error: expect.any(Error),
-          }),
-          expect.stringContaining('Error during GetAiBlameAttributionPrompt')
+        expect(global.fetch).not.toHaveBeenCalled()
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('No conversation messages from API')
         )
+      })
+    })
+
+    describe('getAIBlamePrompt (API-only conversation)', () => {
+      it('uses conversationMessages from API and never fetches promptUrl', async () => {
+        const messages = [
+          { type: 'USER_PROMPT', text: 'hello', date: '2026-01-01T00:00:00Z' },
+        ]
+        const mockGqlClient = {
+          getAIBlameAttributionPrompt: vi.fn().mockResolvedValue({
+            getAIBlameInferenceData: {
+              promptUrl: 'https://example.com/should-not-fetch',
+              conversationMessages: messages,
+            },
+          }),
+        }
+
+        const { createGQLClient } =
+          await import('../src/shared/gqlClientFactory')
+        ;(createGQLClient as any).mockResolvedValue(mockGqlClient)
+
+        const { GetAiBlamePrompt } = await import('../src/ui/AIBlameCache')
+
+        const result = await GetAiBlamePrompt('attr-1')
+
+        expect(JSON.parse(result!)).toEqual(messages)
+        expect(global.fetch).not.toHaveBeenCalled()
+        expect(mockGqlClient.getAIBlameAttributionPrompt).toHaveBeenCalledWith({
+          aiBlameAttributionId: 'attr-1',
+        })
       })
     })
   })

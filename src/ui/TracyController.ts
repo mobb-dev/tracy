@@ -234,6 +234,26 @@ export class TracyController {
     return version !== this.panelState.version
   }
 
+  /**
+   * When the info panel is open, keep it in sync with the status bar after the
+   * user moves the cursor. Otherwise `panelState` (used by the panel `getCtx()`)
+   * stays stale until the user clicks the status bar again.
+   */
+  private async syncInfoPanelWithStatusBarAfterLineChange(
+    blameInfo: 'SUCCESS' | 'ERROR',
+    blameError?: string
+  ): Promise<void> {
+    if (!this.infoPanel) {
+      return
+    }
+    this.updatePanelState({
+      filePath: this.statusBarState.filePath,
+      lineNumber: this.statusBarState.lineNumber,
+      attribution: this.statusBarState.attribution,
+    })
+    await this.infoPanel.updateBlameInfoState(blameInfo, blameError)
+  }
+
   // Orchestration functions (coordinate data + UI)
   private async handleLineChange(
     document: vscode.TextDocument,
@@ -251,6 +271,20 @@ export class TracyController {
     // Update status bar to loading state
     this.uiUpdateStatusBarState(LineState.LOADING)
 
+    // If the info panel is open, show loading immediately for the new line so
+    // stale summary/conversation is not left visible while blame loads.
+    if (this.infoPanel) {
+      this.updatePanelState({
+        filePath,
+        lineNumber,
+        attribution: null,
+      })
+      await this.infoPanel.updateBlameInfoState('LOADING')
+      if (this.isStatusBarStale(version)) {
+        return
+      }
+    }
+
     try {
       // Load blame info
       const blameResult = await this.loadBlameInfo(document, lineNumber, false)
@@ -261,10 +295,22 @@ export class TracyController {
       if (!blameResult.success) {
         if (blameResult.error === 'dirty_file') {
           this.uiUpdateStatusBarState(LineState.BLAME_DIRTY)
+          await this.syncInfoPanelWithStatusBarAfterLineChange(
+            'ERROR',
+            'Cannot show blame info for unsaved files'
+          )
         } else if (blameResult.error === 'no_blame_info') {
           this.uiUpdateStatusBarState(LineState.BLAME_NOT_COMMITTED)
+          await this.syncInfoPanelWithStatusBarAfterLineChange(
+            'ERROR',
+            'No git blame information available for this line. You may need to commit the changes first.'
+          )
         } else {
           this.uiUpdateStatusBarState(LineState.BLAME_ERROR)
+          await this.syncInfoPanelWithStatusBarAfterLineChange(
+            'ERROR',
+            'Failed to load git blame information'
+          )
         }
         return
       }
@@ -288,6 +334,7 @@ export class TracyController {
 
       // Update status bar
       this.uiUpdateStatusBarState(attributionResult.lineState)
+      await this.syncInfoPanelWithStatusBarAfterLineChange('SUCCESS')
     } catch (error) {
       if (this.isStatusBarStale(version)) {
         return
@@ -301,6 +348,10 @@ export class TracyController {
         false
       )
       this.uiUpdateStatusBarState(LineState.ATTRIBUTION_ERROR)
+      await this.syncInfoPanelWithStatusBarAfterLineChange(
+        'ERROR',
+        'Failed to load attribution data'
+      )
     }
   }
 

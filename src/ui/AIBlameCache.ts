@@ -578,6 +578,12 @@ export async function analyzeCommitForExtensionAIBlameWrapper(
   }
 }
 
+/**
+ * Loads CHAT prompt / conversation JSON for the Tracy panel.
+ *
+ * Conversation text always comes from the API (`getAIBlameInferenceData.conversationMessages`).
+ * The extension does not download presigned S3 URLs; Tracy vs legacy is handled on the server.
+ */
 export async function GetAiBlamePrompt(
   attributionId: string
 ): Promise<string | null> {
@@ -587,30 +593,19 @@ export async function GetAiBlamePrompt(
       aiBlameAttributionId: attributionId,
     }
     const result = await gqlClient.getAIBlameAttributionPrompt(variables)
-    const { promptUrl } = result.getAIBlameInferenceData
+    const { conversationMessages } = result.getAIBlameInferenceData
 
-    if (!promptUrl) {
-      logger.warn(`No prompt URL found for attribution ${attributionId}`)
-      return null
-    }
-
-    // Download the prompt content from the URL
-    logger.info(`Downloading prompt from URL: ${promptUrl}`)
-    const response = await fetch(promptUrl)
-
-    if (!response.ok) {
-      logger.error(
-        `Failed to download prompt: ${response.status} ${response.statusText}`
+    if (conversationMessages) {
+      logger.info(
+        `Using ${conversationMessages.length} conversation messages from backend for attribution ${attributionId}`
       )
-      return null
+      return JSON.stringify(conversationMessages)
     }
 
-    const promptContent = await response.text()
-    logger.info(
-      `Successfully downloaded prompt content (${promptContent.length} characters)`
+    logger.warn(
+      `No conversation messages from API for attribution ${attributionId}`
     )
-
-    return promptContent
+    return null
   } catch (err) {
     invalidateOnAuthError(err)
     logger.error({ error: err }, 'Error during GetAiBlameAttributionPrompt')
@@ -618,6 +613,9 @@ export async function GetAiBlamePrompt(
   }
 }
 
+/**
+ * Polls `getPromptSummary` until the server has a cached summary or errors.
+ */
 export async function GetAiBlamePromptSummary(
   attributionId: string
 ): Promise<PromptSummary | 'PROCESSING' | null> {
