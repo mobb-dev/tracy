@@ -11,6 +11,7 @@ import { MockUploadServer } from '../shared/mock-server'
 import { CheckpointTracker } from '../shared/test-utilities'
 
 // Test configuration
+const CLI_DIST = path.resolve(__dirname, '../../../../cli/dist/index.mjs')
 const UPLOAD_WAIT_TIMEOUT = 30000 // 30 seconds for upload
 const CLAUDE_CODE_TIMEOUT = 30000 // 30 seconds for Claude Code to respond
 const TEST_TIMEOUT = 90000 // 90 seconds total test timeout
@@ -72,6 +73,12 @@ describe('Claude Code E2E with Hook Integration', () => {
       }
     }
 
+    // Kill daemon if running
+    try {
+      const pidData = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.mobbdev', 'daemon.pid'), 'utf8'))
+      process.kill(pidData.pid, 'SIGKILL')
+    } catch { /* already dead or no pid file */ }
+
     // Stop mock server
     if (mockServer) {
       await mockServer.stop()
@@ -103,6 +110,12 @@ describe('Claude Code E2E with Hook Integration', () => {
   it(
     'should capture and upload AI attribution via hook',
     async () => {
+      // Kill any stale daemon from a previous test run
+      try {
+        const pidData = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.mobbdev', 'daemon.pid'), 'utf8'))
+        process.kill(pidData.pid, 'SIGKILL')
+      } catch { /* no stale daemon */ }
+
       testStartTime = Date.now()
       tracker.logTimestamp('Test started')
 
@@ -231,8 +244,9 @@ describe('Claude Code E2E with Hook Integration', () => {
           cwd: testWorkspaceDir,
           env: {
             ...process.env,
-            // Point API to mock server for any GraphQL calls from the hook
             API_URL: 'http://localhost:3000/graphql',
+            // Use local CLI build so the hook/shim spawns the daemon from source
+            MOBBDEV_LOCAL_CLI: CLI_DIST,
           },
           // stdin: ignore (prevents hanging), stdout/stderr: inherit for visibility
           stdio: ['ignore', 'inherit', 'inherit'],

@@ -7,5 +7,6 @@ export default defineConfig({
     exclude: [],
     reporters: ['default'],
     testTimeout: 180000,
+    fileParallelism: false,
   },
 })

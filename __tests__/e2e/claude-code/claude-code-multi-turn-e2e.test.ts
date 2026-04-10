@@ -10,6 +10,7 @@ import { MockUploadServer } from '../shared/mock-server'
 import { CheckpointTracker } from '../shared/test-utilities'
 
 // Test configuration
+const CLI_DIST = path.resolve(__dirname, '../../../../cli/dist/index.mjs')
 const UPLOAD_WAIT_TIMEOUT = 30000
 const CLAUDE_CODE_TIMEOUT = 120000 // 2 minutes — prompt includes a 15s sleep
 const TEST_TIMEOUT = 180000 // 3 minutes total
@@ -62,6 +63,12 @@ describe('Claude Code E2E — Multi-Turn Incremental Cursor', () => {
       }
     }
 
+    // Kill daemon if running
+    try {
+      const pidData = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.mobbdev', 'daemon.pid'), 'utf8'))
+      process.kill(pidData.pid, 'SIGKILL')
+    } catch { /* already dead or no pid file */ }
+
     if (mockServer) {
       await mockServer.stop()
     }
@@ -90,6 +97,12 @@ describe('Claude Code E2E — Multi-Turn Incremental Cursor', () => {
   it(
     'should upload incrementally via cursor — no duplicate records across hook fires',
     async () => {
+      // Kill any stale daemon from a previous test run
+      try {
+        const pidData = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.mobbdev', 'daemon.pid'), 'utf8'))
+        process.kill(pidData.pid, 'SIGKILL')
+      } catch { /* no stale daemon */ }
+
       tracker.logTimestamp('Test started')
 
       // ==== Step 1: Verify Claude Code is installed ====
@@ -190,6 +203,7 @@ describe('Claude Code E2E — Multi-Turn Incremental Cursor', () => {
           env: {
             ...process.env,
             API_URL: 'http://localhost:3001/graphql',
+            MOBBDEV_LOCAL_CLI: CLI_DIST,
             // Unset CLAUDECODE to avoid "nested session" rejection when
             // running this test from within a Claude Code session.
             CLAUDECODE: '',
@@ -305,6 +319,7 @@ describe('Claude Code E2E — Multi-Turn Incremental Cursor', () => {
           'system',
           'summary',
           'progress',
+          'attachment',
         ]).toContain(parsed.type)
       }
 
