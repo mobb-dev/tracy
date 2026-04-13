@@ -155,21 +155,8 @@ RUN echo "📦 VSIX files after COPY:" && ls -la *.vsix || (echo "❌ ERROR: No 
 # pnpm v10+ blocks build scripts by default which breaks @vscode/sqlite3 and better-sqlite3
 RUN npm ci || npm install
 
-# Extract the VSIX to a staging area and rebuild native modules for Linux
-# This is needed because the VSIX was built on macOS with macOS-native binaries
-# Use the non-dev VSIX (smaller, production build)
-RUN mkdir -p /tmp/vsix-staging && \
-    VSIX_FILE=$(ls mobb-ai-tracer-[0-9]*.vsix | sort -V | tail -1) && \
-    echo "Extracting: $VSIX_FILE (latest version)" && \
-    unzip -q "$VSIX_FILE" -d /tmp/vsix-staging && \
-    cd /tmp/vsix-staging/extension && \
-    npm install @vscode/sqlite3 --build-from-source && \
-    echo "✅ Native module rebuilt for Linux"
-
-# Repackage the VSIX with Linux-native modules
-RUN cd /tmp/vsix-staging && \
-    zip -r /workspace/clients/tracer_ext/mobb-ai-tracer-linux.vsix . && \
-    echo "✅ VSIX repackaged with Linux-native modules"
+# No native module repackaging needed — esbuild bundles everything into the VSIX.
+# The extension uses node:sqlite (Node.js built-in), not @vscode/sqlite3.
 
 # Verify VSIX was created
 RUN ls -lh *.vsix && echo "✓ VSIX files ready for testing"

@@ -1,9 +1,7 @@
-node_modules/**/snyk
+node_modules/**
 .DS_Store
 .eslintcache
 __tests__/**
-.DS_Store
-.eslintcache
 .eslintignore
 .eslintrc.json
 .gitignore
@@ -18,6 +16,7 @@ precommit-format.sh
 src/**
 tsconfig.eslint.json
 tsconfig.json
+esbuild.mjs
 vitest.config.ts
 .env.*
 !.env
@@ -28,6 +27,7 @@ icon.svg
 documentation/**
 version-check.sh
 publish.sh
+coverage/**
 playwright-report/**
 test-results/**
 E2E-TESTING.md

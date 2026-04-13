@@ -175,13 +175,7 @@ node scripts/modify-package-for-dev.js "$API_URL" "$WEB_URL" "$ENV"
 echo ""
 echo "Cleaning previous builds..."
 rm -rf mobb-ai-tracer-dev-*.vsix
-rm -rf node_modules
 rm -rf out
-
-# Install dependencies and build
-echo ""
-echo "Installing dependencies..."
-npm install
 
 echo ""
 echo "Building..."
@@ -189,17 +183,9 @@ npm run build
 
 echo ""
 echo "Packaging VSIX..."
-# vsce runs `npm list --production` which crawls up to the pnpm monorepo root
-# and reports spurious errors. Temporarily hide the root node_modules.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_NM="$SCRIPT_DIR/../../node_modules"
-if [[ -d "$ROOT_NM" ]]; then
-  mv "$ROOT_NM" "${ROOT_NM}.dev-hide"
-fi
-npx vsce package --allow-package-env-file
-if [[ -d "${ROOT_NM}.dev-hide" ]]; then
-  mv "${ROOT_NM}.dev-hide" "$ROOT_NM"
-fi
+# --no-dependencies: esbuild bundles everything into out/extension.js,
+# so node_modules is not needed in the VSIX.
+npx vsce package --allow-package-env-file --no-dependencies
 
 # Get the generated VSIX filename
 VSIX_FILE=$(ls mobb-ai-tracer-dev-*.vsix 2>/dev/null | head -1)

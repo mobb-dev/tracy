@@ -61,21 +61,9 @@ COPY clients/tracer_ext/package.json clients/tracer_ext/package-lock.json ./
 
 # Install npm dependencies and rebuild native modules in single layer
 COPY clients/tracer_ext/mobb-ai-tracer*.vsix ./
-RUN npm ci \
-    # Extract VSIX and rebuild native modules for Linux
-    && mkdir -p /tmp/vsix-staging \
-    && VSIX_FILE=$(ls mobb-ai-tracer-[0-9]*.vsix | head -1) \
-    && unzip -q "$VSIX_FILE" -d /tmp/vsix-staging \
-    && cd /tmp/vsix-staging/extension \
-    && npm install @vscode/sqlite3 --build-from-source \
-    # Repackage with Linux-native modules
-    && cd /tmp/vsix-staging \
-    && zip -r /workspace/clients/tracer_ext/mobb-ai-tracer-linux.vsix . \
-    # Clean up to reduce layer size
-    && rm -rf /tmp/vsix-staging \
-    && rm -f /workspace/clients/tracer_ext/mobb-ai-tracer-[0-9]*.vsix \
-    && npm cache clean --force \
-    && rm -rf /root/.npm /home/testuser/.npm
+# No native module repackaging needed — esbuild bundles everything into the VSIX.
+# The extension uses node:sqlite (Node.js built-in), not @vscode/sqlite3.
+RUN npm ci
 
 # Copy test files
 COPY clients/tracer_ext/__tests__ ./__tests__

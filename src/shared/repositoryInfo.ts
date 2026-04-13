@@ -231,7 +231,16 @@ function detectIDEFromEnv(): IDE {
   ) {
     return 'webstorm'
   }
+  // Cursor and Windsurf are VS Code forks — they set VSCODE_IPC_HOOK/VSCODE_PID too.
+  // Check vscode.env.appName before falling back to generic VS Code detection.
   if (env['VSCODE_IPC_HOOK'] || env['VSCODE_PID']) {
+    const appName = vscode.env.appName?.toLowerCase() ?? ''
+    if (appName.includes('cursor')) {
+      return 'cursor'
+    }
+    if (appName.includes('windsurf')) {
+      return 'windsurf'
+    }
     return 'vscode'
   }
 

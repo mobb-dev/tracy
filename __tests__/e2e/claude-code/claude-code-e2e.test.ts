@@ -338,6 +338,7 @@ describe('Claude Code E2E with Hook Integration', () => {
         'system',
         'summary',
         'progress',
+        'attachment',
       ]).toContain(parsedRawData.type)
 
       tracker.mark('Attribution Uploaded')
