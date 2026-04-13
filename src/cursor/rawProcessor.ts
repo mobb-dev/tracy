@@ -1,6 +1,6 @@
 import { configStore } from '../mobbdev_src/utils/ConfigStoreService'
 import { logger } from '../shared/logger'
-import type { DBRow } from './db'
+import type { DBRow } from './types'
 
 /**
  * Shape of raw data sent to the server.
@@ -64,6 +64,68 @@ function extractBubbleId(key: string): string {
 }
 
 /**
+ * Extract the composerId from a `bubbleId:<composerId>:<bubbleId>` key.
+ * Returns `undefined` for keys that don't match the expected shape so
+ * callers can decide whether to skip / log / fall back.
+ *
+ * Single source of truth for the key format — used by both
+ * `discoverActiveSessions` and `groupRecentKeysBySession`.
+ */
+export function extractComposerIdFromKey(key: string): string | undefined {
+  const parts = key.split(':')
+  if (parts.length >= 3 && parts[1]) {
+    return parts[1]
+  }
+  return undefined
+}
+
+/** Throttle for `unexpectedKeyFormat` warnings — log at most once per process. */
+let didWarnUnexpectedKeyFormat = false
+
+/**
+ * Group recent bubble keys by composerId so the worker can use a fast
+ * `WHERE key IN (...)` lookup instead of a `LIKE` scan per session.
+ *
+ * Logs a one-time warning if any keys don't match the expected
+ * `bubbleId:<composerId>:<bubbleId>` shape — silently dropping malformed
+ * keys would mask a Cursor schema change that disables our fast path.
+ */
+export function groupRecentKeysBySession(
+  recentBubbles: DBRow[]
+): Map<string, string[]> {
+  const keysBySession = new Map<string, string[]>()
+  let unexpectedSample: string | undefined
+  for (const row of recentBubbles) {
+    const composerId = extractComposerIdFromKey(row.key)
+    if (composerId === undefined) {
+      if (unexpectedSample === undefined) {
+        unexpectedSample = row.key
+      }
+      continue
+    }
+    let list = keysBySession.get(composerId)
+    if (list === undefined) {
+      list = []
+      keysBySession.set(composerId, list)
+    }
+    list.push(row.key)
+  }
+  if (unexpectedSample !== undefined && !didWarnUnexpectedKeyFormat) {
+    didWarnUnexpectedKeyFormat = true
+    logger.warn(
+      { sampleKey: unexpectedSample },
+      '[rawProcessor] Unexpected bubble-key format — fast-path IN(...) query may degrade to LIKE scan. Verify Cursor key schema.'
+    )
+  }
+  return keysBySession
+}
+
+/** Test-only: reset the one-shot warn flag between test cases. */
+export function _resetKeyFormatWarnForTests(): void {
+  didWarnUnexpectedKeyFormat = false
+}
+
+/**
  * Extract unique composerIds from recent bubble keys, supplemented by
  * persisted cursors from configStore. This ensures sessions that go idle
  * (falling outside the recent window) are still re-fetched if they have
@@ -75,9 +137,9 @@ export function discoverActiveSessions(recentBubbles: DBRow[]): string[] {
 
   // Sessions with recent activity
   for (const row of recentBubbles) {
-    const parts = row.key.split(':')
-    if (parts.length >= 3 && parts[1]) {
-      sessionIds.add(parts[1])
+    const composerId = extractComposerIdFromKey(row.key)
+    if (composerId !== undefined) {
+      sessionIds.add(composerId)
     }
   }
 

@@ -14,6 +14,7 @@ import {
   discoverActiveSessions,
   getCursorRowId,
   getIncompleteBubbleKeys,
+  groupRecentKeysBySession,
   prepareSessionForUpload,
   revisitIncompleteBubbles,
   updateIncompleteBubbles,
@@ -115,6 +116,12 @@ export class CursorMonitor extends BaseMonitor {
         const recentKeys = await getRecentBubbleKeys(RECENT_DISCOVERY_LIMIT)
         const sessionIds = discoverActiveSessions(recentKeys)
 
+        // Group discovered keys by composerId so the worker can use a
+        // fast `WHERE key IN (...)` lookup instead of a `LIKE` scan
+        // per session (the slow path that was timing out in T-445).
+        // Key parsing lives in rawProcessor for a single source of truth.
+        const keysBySession = groupRecentKeysBySession(recentKeys)
+
         // Derive per-session bubble limit so total stays within MAX_RECORDS_PER_CYCLE
         const bubblesPerSession =
           sessionIds.length > 0
@@ -128,6 +135,7 @@ export class CursorMonitor extends BaseMonitor {
             composerId,
             afterRowId: getCursorRowId(composerId),
             incompleteBubbleKeys: getIncompleteBubbleKeys(composerId),
+            discoveredKeys: keysBySession.get(composerId),
           })),
           bubblesPerSession
         )

@@ -4,18 +4,17 @@
  * preventing Cursor freezes caused by long-running synchronous queries.
  */
 
-import * as fs from 'node:fs'
 import { parentPort, workerData } from 'node:worker_threads'
+
+import type { DBRow, SessionRequest, SessionResult } from './types'
 
 // node:sqlite is available in Node 22+
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { DatabaseSync } = require('node:sqlite')
 
-type DBRow = {
-  rowid?: number
-  key: string
-  value?: string
-}
+type PreparedStatement = ReturnType<
+  InstanceType<typeof DatabaseSync>['prepare']
+>
 
 type WorkerRequest = {
   id: number
@@ -29,9 +28,19 @@ type WorkerResponse = {
   error?: string
 }
 
+/**
+ * SQLite's default `SQLITE_MAX_VARIABLE_NUMBER` is 999. We reserve 2 slots
+ * for `afterRowId` and `limit`, leaving up to 997 for `IN (...)` placeholders.
+ * Queries with more keys than this are split into chunks and merged.
+ *
+ * Today the upstream `RECENT_DISCOVERY_LIMIT` is 500, so a single session
+ * can have at most 500 discovered keys — we never actually chunk in
+ * practice. The cap exists to fail safely if that constant is ever raised.
+ */
+const MAX_IN_PARAMS = 900
+
 let db: InstanceType<typeof DatabaseSync> | null = null
 const { dbPath, sessionBubblesLimit } = workerData
-const journalPath = `${dbPath}-journal`
 
 // Safety net: catch unexpected promise rejections so the worker never crashes silently
 process.on('unhandledRejection', (reason) => {
@@ -48,10 +57,12 @@ process.on('unhandledRejection', (reason) => {
 function getConnection(): InstanceType<typeof DatabaseSync> {
   if (!db) {
     db = new DatabaseSync(dbPath, { readOnly: true })
-    // busy_timeout = 0: fail instantly if the DB is locked.
-    // Cursor's database is Cursor's — we are guests and must never block its writes.
-    // The poll loop retries in ~20 seconds anyway.
-    db.exec('PRAGMA busy_timeout = 0')
+    // busy_timeout = 3000: let SQLite handle transient lock contention
+    // internally (up to 3s) rather than failing immediately. Previously we
+    // used 0 + a journal-file pre-check, but under heavy Cursor write load
+    // the journal check became its own failure mode. 3s is well below the
+    // 10s worker-request timeout, so we still fail fast on genuine hangs.
+    db.exec('PRAGMA busy_timeout = 3000')
   }
   return db
 }
@@ -66,26 +77,45 @@ function closeConnection(): void {
 }
 
 /**
- * Check if Cursor is mid-write transaction by looking for the journal file.
- * If the journal exists, we skip the query entirely to give Cursor absolute
- * write precedence.
+ * Send a diagnostic message to the main thread's structured logger.
+ * Used for events that aren't tied to a specific request (e.g. SQLite
+ * contention notices) so all observability flows through `postMessage`
+ * instead of the worker writing directly to stderr via `console`.
+ *
+ * `id: -2` distinguishes diagnostics from request responses (`id >= 0`)
+ * and from unhandled-rejection notices (`id: -1`).
  */
-function isCursorWriting(): boolean {
+function postDiagnostic(
+  level: 'debug' | 'info' | 'warn' | 'error',
+  msg: string
+): void {
   try {
-    return fs.existsSync(journalPath)
+    parentPort?.postMessage({ id: -2, type: 'diagnostic', level, msg })
   } catch {
-    return false
+    // Last resort — if postMessage itself throws, drop the diagnostic.
   }
 }
 
 /**
  * Execute a query. On failure, close the connection (releasing any SHARED
  * locks) and re-throw. No retries — the poll loop handles that.
+ *
+ * Routes `SQLITE_BUSY` / "database is locked" errors back to the main
+ * thread as a diagnostic so lock contention remains visible after the
+ * removal of the `isCursorWriting()` pre-check (replaced by
+ * `PRAGMA busy_timeout = 3000` in `getConnection`).
  */
 function execute<T>(fn: (conn: InstanceType<typeof DatabaseSync>) => T): T {
   try {
     return fn(getConnection())
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (msg.includes('SQLITE_BUSY') || msg.includes('database is locked')) {
+      postDiagnostic(
+        'warn',
+        `[dbWorker] SQLite contention after busy_timeout=3000ms: ${msg}`
+      )
+    }
     closeConnection()
     throw err
   }
@@ -117,19 +147,136 @@ function escapeLikeWildcards(value: string): string {
   return value.replace(/[%_\\]/g, '\\$&')
 }
 
-type SessionRequest = {
-  composerId: string
-  afterRowId?: number
-  /** Exact keys of previously-incomplete bubbles to re-check. */
-  incompleteBubbleKeys?: string[]
+/**
+ * Get-or-create a prepared `IN (...)` statement keyed by placeholder count
+ * and rowid-filter presence. Statements are reused within a single
+ * `prefetchSessions` call (cleared when the connection closes) — avoids
+ * re-compiling identical SQL when multiple sessions have the same
+ * `discoveredKeys.length`.
+ */
+function getInClauseStmt(
+  conn: InstanceType<typeof DatabaseSync>,
+  placeholderCount: number,
+  withRowIdFilter: boolean,
+  cache: Map<string, PreparedStatement>
+): PreparedStatement {
+  const cacheKey = `${withRowIdFilter ? 'rowid' : 'norowid'}:${placeholderCount}`
+  const existing = cache.get(cacheKey)
+  if (existing) {
+    return existing
+  }
+  const placeholders = new Array(placeholderCount).fill('?').join(',')
+  const sql = withRowIdFilter
+    ? `SELECT rowid, key, value FROM cursorDiskKV WHERE key IN (${placeholders}) AND rowid > ? ORDER BY rowid ASC LIMIT ?`
+    : `SELECT rowid, key, value FROM cursorDiskKV WHERE key IN (${placeholders}) ORDER BY rowid ASC LIMIT ?`
+  const stmt = conn.prepare(sql)
+  cache.set(cacheKey, stmt)
+  return stmt
 }
 
-type SessionResult = {
-  composerId: string
-  bubbles: DBRow[]
-  composerDataValue: string | undefined
-  /** Re-fetched incomplete bubbles (by exact key). */
-  revisitedBubbles: DBRow[]
+/**
+ * Run an IN(...) lookup against `discoveredKeys` that exceeds
+ * `MAX_IN_PARAMS`, chunking into batches of `MAX_IN_PARAMS` to stay below
+ * SQLite's `SQLITE_MAX_VARIABLE_NUMBER` (default 999).
+ *
+ * Defensive only — current upstream bound `RECENT_DISCOVERY_LIMIT = 500`
+ * keeps us well under `MAX_IN_PARAMS`, so this path is unreachable today.
+ *
+ * Each chunk is queried with the same `LIMIT`; results are merged, sorted
+ * by rowid, and sliced to the global limit. Note that with skewed
+ * distributions an individual chunk can hit its LIMIT and drop rows that
+ * would have been in the global top-N — acceptable because chunking only
+ * activates if the upstream limit ever grows past 900.
+ */
+function fetchBubblesChunked(
+  conn: InstanceType<typeof DatabaseSync>,
+  discoveredKeys: string[],
+  afterRowId: number | undefined,
+  limit: number,
+  inStmtCache: Map<string, PreparedStatement>
+): DBRow[] {
+  const withRowId = afterRowId != null
+  const merged: DBRow[] = []
+  for (let i = 0; i < discoveredKeys.length; i += MAX_IN_PARAMS) {
+    const chunk = discoveredKeys.slice(i, i + MAX_IN_PARAMS)
+    const stmt = getInClauseStmt(conn, chunk.length, withRowId, inStmtCache)
+    const rows = withRowId
+      ? (stmt.all(...chunk, afterRowId, limit) as DBRow[])
+      : (stmt.all(...chunk, limit) as DBRow[])
+    merged.push(...rows)
+  }
+  merged.sort((a, b) => (a.rowid ?? 0) - (b.rowid ?? 0))
+  return merged.slice(0, limit)
+}
+
+/**
+ * Fetch bubbles for a single session — dispatcher across three paths.
+ *
+ * Fast path (single chunk): when the caller has already discovered exact
+ * bubble keys (via `getRecentBubbleKeys`), use a single `IN (...)`
+ * lookup. Orders of magnitude faster than `LIKE` on multi-GB databases —
+ * 200x in the T-445 stress repro. Used on every cycle including
+ * first-run: per-session LIKE blows past the 10s worker timeout on large
+ * DBs, leaving users with no persisted cursor stuck forever (the original
+ * T-445 lockout).
+ *
+ * Fast path (chunked): same as above but split across multiple queries
+ * when `discoveredKeys.length > MAX_IN_PARAMS`. Defensive — see
+ * `fetchBubblesChunked`.
+ *
+ * Fallback: LIKE scan, only for sessions whose keys aren't in the
+ * recent-discovery window (rare — pending-cursor sessions discovered from
+ * configStore that have `afterRowId` set).
+ */
+function fetchBubbles(
+  conn: InstanceType<typeof DatabaseSync>,
+  args: {
+    composerId: string
+    afterRowId: number | undefined
+    discoveredKeys: string[] | undefined
+    limit: number
+    inStmtCache: Map<string, PreparedStatement>
+    bubbleStmtWithRowId: PreparedStatement
+    bubbleStmtNoRowId: PreparedStatement
+  }
+): DBRow[] {
+  const {
+    composerId,
+    afterRowId,
+    discoveredKeys,
+    limit,
+    inStmtCache,
+    bubbleStmtWithRowId,
+    bubbleStmtNoRowId,
+  } = args
+
+  if (discoveredKeys && discoveredKeys.length > 0) {
+    if (discoveredKeys.length > MAX_IN_PARAMS) {
+      return fetchBubblesChunked(
+        conn,
+        discoveredKeys,
+        afterRowId,
+        limit,
+        inStmtCache
+      )
+    }
+    const withRowId = afterRowId != null
+    const stmt = getInClauseStmt(
+      conn,
+      discoveredKeys.length,
+      withRowId,
+      inStmtCache
+    )
+    return withRowId
+      ? (stmt.all(...discoveredKeys, afterRowId, limit) as DBRow[])
+      : (stmt.all(...discoveredKeys, limit) as DBRow[])
+  }
+
+  const escapedId = escapeLikeWildcards(composerId)
+  const pattern = `bubbleId:${escapedId}:%`
+  return afterRowId != null
+    ? (bubbleStmtWithRowId.all(pattern, afterRowId, limit) as DBRow[])
+    : (bubbleStmtNoRowId.all(pattern, limit) as DBRow[])
 }
 
 /**
@@ -156,38 +303,43 @@ function prefetchSessions(
     const exactKeyStmt = conn.prepare(
       'SELECT rowid, key, value FROM cursorDiskKV WHERE key = ?'
     )
+    const inStmtCache = new Map<string, PreparedStatement>()
 
-    return sessions.map(({ composerId, afterRowId, incompleteBubbleKeys }) => {
-      const escapedId = escapeLikeWildcards(composerId)
-      const pattern = `bubbleId:${escapedId}:%`
+    return sessions.map(
+      ({ composerId, afterRowId, incompleteBubbleKeys, discoveredKeys }) => {
+        const bubbles = fetchBubbles(conn, {
+          composerId,
+          afterRowId,
+          discoveredKeys,
+          limit,
+          inStmtCache,
+          bubbleStmtWithRowId,
+          bubbleStmtNoRowId,
+        })
 
-      const bubbles =
-        afterRowId != null
-          ? (bubbleStmtWithRowId.all(pattern, afterRowId, limit) as DBRow[])
-          : (bubbleStmtNoRowId.all(pattern, limit) as DBRow[])
+        const row = composerStmt.get(`composerData:${composerId}`) as
+          | { value?: string }
+          | undefined
 
-      const row = composerStmt.get(`composerData:${composerId}`) as
-        | { value?: string }
-        | undefined
-
-      // Re-fetch incomplete bubbles by exact key (O(1) each)
-      const revisitedBubbles: DBRow[] = []
-      if (incompleteBubbleKeys) {
-        for (const key of incompleteBubbleKeys) {
-          const result = exactKeyStmt.get(key) as DBRow | undefined
-          if (result) {
-            revisitedBubbles.push(result)
+        // Re-fetch incomplete bubbles by exact key (O(1) each)
+        const revisitedBubbles: DBRow[] = []
+        if (incompleteBubbleKeys) {
+          for (const key of incompleteBubbleKeys) {
+            const result = exactKeyStmt.get(key) as DBRow | undefined
+            if (result) {
+              revisitedBubbles.push(result)
+            }
           }
         }
-      }
 
-      return {
-        composerId,
-        bubbles,
-        composerDataValue: row?.value,
-        revisitedBubbles,
+        return {
+          composerId,
+          bubbles,
+          composerDataValue: row?.value,
+          revisitedBubbles,
+        }
       }
-    })
+    )
   })
 }
 
@@ -195,12 +347,6 @@ function prefetchSessions(
 parentPort?.on('message', (msg: WorkerRequest) => {
   const { id, method, params } = msg
   let response: WorkerResponse
-
-  // Check journal file before any query — if Cursor is mid-write, skip immediately
-  if (method !== 'close' && isCursorWriting()) {
-    parentPort?.postMessage({ id, error: 'database is locked' })
-    return
-  }
 
   try {
     let result: unknown

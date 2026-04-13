@@ -2,12 +2,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { DBRow } from '../src/cursor/db'
 import {
+  _resetKeyFormatWarnForTests,
   advanceCursor,
   cleanupStaleCursors,
   discoverActiveSessions,
+  extractComposerIdFromKey,
+  groupRecentKeysBySession,
   prepareSessionForUpload,
   revisitIncompleteBubbles,
 } from '../src/cursor/rawProcessor'
+import { logger } from '../src/shared/logger'
 
 vi.mock('vscode', () => ({}))
 
@@ -60,6 +64,61 @@ describe('discoverActiveSessions', () => {
     ]
     const sessions = discoverActiveSessions(rows)
     expect(sessions).toEqual(['composer1'])
+  })
+})
+
+describe('extractComposerIdFromKey', () => {
+  it('returns the composerId for a well-formed key', () => {
+    expect(extractComposerIdFromKey('bubbleId:composer1:bubble1')).toBe(
+      'composer1'
+    )
+  })
+
+  it('returns undefined for keys with too few segments', () => {
+    expect(extractComposerIdFromKey('bubbleId')).toBeUndefined()
+    expect(extractComposerIdFromKey('bubbleId:composer1')).toBeUndefined()
+  })
+
+  it('returns undefined when composerId segment is empty', () => {
+    expect(extractComposerIdFromKey('bubbleId::bubble1')).toBeUndefined()
+  })
+})
+
+describe('groupRecentKeysBySession', () => {
+  beforeEach(() => {
+    _resetKeyFormatWarnForTests()
+  })
+
+  it('groups keys by composerId and preserves insertion order', () => {
+    const rows: DBRow[] = [
+      { key: 'bubbleId:c1:b1' },
+      { key: 'bubbleId:c2:b2' },
+      { key: 'bubbleId:c1:b3' },
+    ]
+    const grouped = groupRecentKeysBySession(rows)
+    expect(grouped.get('c1')).toEqual(['bubbleId:c1:b1', 'bubbleId:c1:b3'])
+    expect(grouped.get('c2')).toEqual(['bubbleId:c2:b2'])
+  })
+
+  it('returns an empty map for no rows and does not warn', () => {
+    const grouped = groupRecentKeysBySession([])
+    expect(grouped.size).toBe(0)
+    expect(logger.warn).not.toHaveBeenCalled()
+  })
+
+  it('drops malformed keys and emits exactly one warning across calls', () => {
+    const rows: DBRow[] = [
+      { key: 'bubbleId' },
+      { key: 'bubbleId:c1:b1' },
+      { key: 'bogus' },
+    ]
+    groupRecentKeysBySession(rows)
+    groupRecentKeysBySession(rows) // second call must NOT re-warn
+    expect(logger.warn).toHaveBeenCalledTimes(1)
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ sampleKey: 'bubbleId' }),
+      expect.stringContaining('Unexpected bubble-key format')
+    )
   })
 })
 
