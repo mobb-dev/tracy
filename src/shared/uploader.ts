@@ -17,7 +17,11 @@ import {
 import { getConfig } from './config'
 import { createGQLClient } from './gqlClientFactory'
 import { logger } from './logger'
-import { getNormalizedRepoUrl, repoInfo } from './repositoryInfo'
+import {
+  getNormalizedRepo,
+  type GitRepository,
+  repoInfo,
+} from './repositoryInfo'
 
 type BubbleWithTimestamp = BubbleDataForFilePath & { createdAt?: string }
 
@@ -63,19 +67,20 @@ export async function uploadCursorRawRecords(
 
   const config = getConfig()
 
-  // Cache repo URL lookups within the batch (store Promise to avoid concurrent duplicate calls)
-  const repoUrlCache = new Map<string | undefined, Promise<string | null>>()
+  // Cache repo lookups within the batch (store Promise to avoid concurrent duplicate calls).
+  // Resolves both repositoryUrl and gitRoot in a single lookup.
+  const repoCache = new Map<string | undefined, Promise<GitRepository | null>>()
 
   const tracyRecords: TracyRecordClientInput[] = await Promise.all(
     records.map(async (record) => {
-      // Resolve per-record repo URL from bubble file path
+      // Resolve per-record repo from bubble file path
       const bubble = record.bubble as BubbleWithTimestamp
       const filePath = extractFilePath(bubble)
 
-      if (!repoUrlCache.has(filePath)) {
-        repoUrlCache.set(filePath, getNormalizedRepoUrl(filePath))
+      if (!repoCache.has(filePath)) {
+        repoCache.set(filePath, getNormalizedRepo(filePath))
       }
-      const repositoryUrl = await repoUrlCache.get(filePath)!
+      const repo = await repoCache.get(filePath)!
 
       // Strip internal fields from rawData sent to server
       const {
@@ -89,7 +94,8 @@ export async function uploadCursorRawRecords(
         recordId: record.metadata.recordId,
         recordTimestamp: bubble.createdAt ?? new Date().toISOString(),
         rawData: { bubble: record.bubble, metadata: serverMetadata },
-        repositoryUrl: repositoryUrl ?? undefined,
+        repositoryUrl: repo?.gitRepoUrl ?? undefined,
+        gitRoot: repo?.gitRoot ?? undefined,
         clientVersion: config.extensionVersion,
       }
     })
@@ -173,8 +179,9 @@ export async function uploadCopilotRawRecords(
 
   const config = getConfig()
 
-  // Cache repo URL lookups within the batch (Promise-based to avoid races)
-  const repoUrlCache = new Map<string | undefined, Promise<string | null>>()
+  // Cache repo lookups within the batch (Promise-based to avoid races).
+  // Resolves both repositoryUrl and gitRoot in a single lookup.
+  const repoCache = new Map<string | undefined, Promise<GitRepository | null>>()
 
   // Attach workspace repo mapping so the server can resolve per-event repo URLs
   const workspaceRepos = repoInfo?.repositories?.map((r) => ({
@@ -185,10 +192,10 @@ export async function uploadCopilotRawRecords(
     records.map(async (record) => {
       const filePath = extractFilePathFromRecord(record)
 
-      if (!repoUrlCache.has(filePath)) {
-        repoUrlCache.set(filePath, getNormalizedRepoUrl(filePath))
+      if (!repoCache.has(filePath)) {
+        repoCache.set(filePath, getNormalizedRepo(filePath))
       }
-      const repositoryUrl = await repoUrlCache.get(filePath)!
+      const repo = await repoCache.get(filePath)!
 
       // Inject workspace repos into rawData for server-side per-event resolution
       const rawData: CopilotRawRecord = {
@@ -205,7 +212,8 @@ export async function uploadCopilotRawRecords(
         recordId: record.request.requestId,
         recordTimestamp: new Date(record.request.timestamp).toISOString(),
         rawData,
-        repositoryUrl: repositoryUrl ?? undefined,
+        repositoryUrl: repo?.gitRepoUrl ?? undefined,
+        gitRoot: repo?.gitRoot ?? undefined,
         clientVersion: config.extensionVersion,
       }
     })

@@ -580,9 +580,14 @@ async function discoverRepoFromFilePath(
   }
 }
 
-export async function getNormalizedRepoUrl(
+/**
+ * Resolve the GitRepository (URL + gitRoot) for a file path, applying the
+ * same refresh+discover fallback as getNormalizedRepoUrl. Returns null if no
+ * repo is found or the remote URL is not a recognized SCM provider.
+ */
+export async function getNormalizedRepo(
   filePath?: string
-): Promise<string | null> {
+): Promise<GitRepository | null> {
   let repo = getRelevantRepo(filePath)
 
   // If no repo found and we have a filePath, try refreshing repos in case new ones were added
@@ -616,10 +621,17 @@ export async function getNormalizedRepoUrl(
 
   const parsed = parseScmURL(repo.gitRepoUrl)
   if (parsed?.scmType && parsed.scmType !== 'Unknown') {
-    return repo.gitRepoUrl
+    return repo
   }
 
   return null
+}
+
+export async function getNormalizedRepoUrl(
+  filePath?: string
+): Promise<string | null> {
+  const repo = await getNormalizedRepo(filePath)
+  return repo?.gitRepoUrl ?? null
 }
 
 /**

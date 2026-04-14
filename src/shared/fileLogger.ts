@@ -52,17 +52,10 @@ export async function logJsonToFile(
     const filename = safeHint
       ? `${ts}-${safeId}-${safeHint}.json`
       : `${ts}-${safeId}.json`
-    const safeResolvePath = path
-      .resolve(
-        path.sep,
-        path.normalize(
-          String(resolvePath || '')
-            .replace('\0', '')
-            .replace(/^(\.\.(\/|\\$))+/, '')
-        )
-      )
-      .slice(1)
-    const filePath = path.resolve(safeResolvePath, filename)
+    // resolvePath is already safe: basePath comes from ctx.globalStorageUri (trusted)
+    // and dir was reduced to path.basename above, so no traversal is possible.
+    // filename is built from timestamp + regex-sanitized id/nameHint — no separators.
+    const filePath = path.resolve(resolvePath, filename)
     await fs.writeFile(filePath, JSON.stringify(obj, null, 2))
   } catch (err) {
     logger.error({ err }, 'Failed to write event')

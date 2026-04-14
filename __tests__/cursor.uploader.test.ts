@@ -12,9 +12,10 @@ vi.mock('../src/shared/repositoryInfo', async (importOriginal) => {
     await importOriginal<typeof import('../src/shared/repositoryInfo')>()
   return {
     ...actual,
-    getNormalizedRepoUrl: vi
-      .fn()
-      .mockResolvedValue('https://github.com/test-org/test-repo'),
+    getNormalizedRepo: vi.fn().mockResolvedValue({
+      gitRepoUrl: 'https://github.com/test-org/test-repo',
+      gitRoot: '/tmp/test-repo',
+    }),
   }
 })
 
@@ -98,6 +99,7 @@ describe('uploadCursorRawRecords', () => {
     expect(tracyRecords[0].repositoryUrl).toBe(
       'https://github.com/test-org/test-repo'
     )
+    expect(tracyRecords[0].gitRoot).toBe('/tmp/test-repo')
 
     // Cursor should be advanced to last record per session
     expect(advanceCursorMock).toHaveBeenCalledTimes(2)
@@ -155,9 +157,8 @@ describe('uploadCursorRawRecords', () => {
     expect(options).toEqual({ sanitize: false })
   })
 
-  it('deduplicates repo URL lookups via cache', async () => {
-    const { getNormalizedRepoUrl } =
-      await import('../src/shared/repositoryInfo')
+  it('deduplicates repo lookups via cache', async () => {
+    const { getNormalizedRepo } = await import('../src/shared/repositoryInfo')
 
     const records = [
       makeRecord('session-1', 'r1', '2024-01-01T00:00:01Z'),
@@ -166,8 +167,9 @@ describe('uploadCursorRawRecords', () => {
 
     await uploadCursorRawRecords(records)
 
-    // Both records have no file path (empty codeBlocks), so repo URL
-    // should be resolved once for the shared undefined key
-    expect(getNormalizedRepoUrl).toHaveBeenCalledTimes(1)
+    // Both records have no file path (empty codeBlocks), so the repo lookup
+    // (which now returns both gitRepoUrl and gitRoot in a single call)
+    // should be resolved once for the shared undefined key.
+    expect(getNormalizedRepo).toHaveBeenCalledTimes(1)
   })
 })
