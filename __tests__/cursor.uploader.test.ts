@@ -99,7 +99,6 @@ describe('uploadCursorRawRecords', () => {
     expect(tracyRecords[0].repositoryUrl).toBe(
       'https://github.com/test-org/test-repo'
     )
-    expect(tracyRecords[0].gitRoot).toBe('/tmp/test-repo')
 
     // Cursor should be advanced to last record per session
     expect(advanceCursorMock).toHaveBeenCalledTimes(2)

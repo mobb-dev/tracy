@@ -68,7 +68,6 @@ export async function uploadCursorRawRecords(
   const config = getConfig()
 
   // Cache repo lookups within the batch (store Promise to avoid concurrent duplicate calls).
-  // Resolves both repositoryUrl and gitRoot in a single lookup.
   const repoCache = new Map<string | undefined, Promise<GitRepository | null>>()
 
   const tracyRecords: TracyRecordClientInput[] = await Promise.all(
@@ -95,7 +94,6 @@ export async function uploadCursorRawRecords(
         recordTimestamp: bubble.createdAt ?? new Date().toISOString(),
         rawData: { bubble: record.bubble, metadata: serverMetadata },
         repositoryUrl: repo?.gitRepoUrl ?? undefined,
-        gitRoot: repo?.gitRoot ?? undefined,
         clientVersion: config.extensionVersion,
       }
     })
@@ -180,7 +178,6 @@ export async function uploadCopilotRawRecords(
   const config = getConfig()
 
   // Cache repo lookups within the batch (Promise-based to avoid races).
-  // Resolves both repositoryUrl and gitRoot in a single lookup.
   const repoCache = new Map<string | undefined, Promise<GitRepository | null>>()
 
   // Attach workspace repo mapping so the server can resolve per-event repo URLs
@@ -213,7 +210,6 @@ export async function uploadCopilotRawRecords(
         recordTimestamp: new Date(record.request.timestamp).toISOString(),
         rawData,
         repositoryUrl: repo?.gitRepoUrl ?? undefined,
-        gitRoot: repo?.gitRoot ?? undefined,
         clientVersion: config.extensionVersion,
       }
     })
