@@ -89,31 +89,50 @@ RUN apt-get update && \
     apt-get install -y firefox-esr && \
     rm -rf /var/lib/apt/lists/*
 
-# Pre-install GitHub Copilot extensions to a shared location during Docker build
-# ALWAYS INSTALL LATEST VERSIONS OF COPILOT EXTENSIONS
-# VS Code requires --no-sandbox AND --user-data-dir when running as root
-# IMPORTANT: Clean up Xvfb lock files after to avoid conflicts with runtime tests
-RUN mkdir -p /opt/copilot-extensions /tmp/vscode-root && \
-    Xvfb :99 -screen 0 1920x1080x24 & \
-    sleep 2 && \
-    export DISPLAY=:99 && \
-    echo "📦 Installing latest GitHub Copilot extensions..." && \
-    code --no-sandbox --user-data-dir=/tmp/vscode-root --extensions-dir=/opt/copilot-extensions --install-extension GitHub.copilot --force 2>&1 && \
-    code --no-sandbox --user-data-dir=/tmp/vscode-root --extensions-dir=/opt/copilot-extensions --install-extension GitHub.copilot-chat --force 2>&1 && \
+# Pre-install GitHub Copilot extensions to a shared location during Docker build.
+#
+# We DO NOT use `code --install-extension` because recent VS Code versions ship
+# `GitHub.copilot-chat` as a built-in, causing `code --install-extension` to:
+#   1. Fail copilot-chat ("built-in extension cannot be downgraded")
+#   2. Silently roll back GitHub.copilot (its extensionPack depends on chat)
+#   3. Still exit 0, leaving /opt/copilot-extensions empty and breaking tests.
+#
+# Instead we:
+#   1. Download the main Copilot VSIX directly from the marketplace and extract
+#      it (skips VS Code's dep resolution entirely).
+#   2. Copy the Copilot Chat built-in from the VS Code install directory to the
+#      canonical `github.copilot-chat-<version>` location the tests look for.
+#   3. Hard-validate both extensions are present — fail the build loudly rather
+#      than silently produce a stale image.
+RUN set -eux && \
+    mkdir -p /opt/copilot-extensions && \
+    echo "📦 Downloading GitHub Copilot VSIX from marketplace..." && \
+    curl -fsSL --compressed \
+      "https://marketplace.visualstudio.com/_apis/public/gallery/publishers/GitHub/vsextensions/copilot/latest/vspackage" \
+      -o /tmp/github.copilot.vsix && \
+    COPILOT_VER=$(unzip -p /tmp/github.copilot.vsix extension/package.json | \
+      python3 -c "import sys,json; print(json.load(sys.stdin)['version'])") && \
+    echo "📦 Extracting GitHub.copilot v${COPILOT_VER}..." && \
+    mkdir -p /tmp/copilot-unzip && \
+    unzip -q /tmp/github.copilot.vsix -d /tmp/copilot-unzip && \
+    mv /tmp/copilot-unzip/extension \
+       "/opt/copilot-extensions/github.copilot-${COPILOT_VER}" && \
+    rm -rf /tmp/copilot-unzip /tmp/github.copilot.vsix && \
+    echo "📦 Copying built-in GitHub.copilot-chat from VS Code install..." && \
+    CHAT_SRC=/usr/share/code/resources/app/extensions/copilot && \
+    CHAT_VER=$(python3 -c "import json; print(json.load(open('${CHAT_SRC}/package.json'))['version'])") && \
+    cp -r "${CHAT_SRC}" "/opt/copilot-extensions/github.copilot-chat-${CHAT_VER}" && \
     chmod -R 755 /opt/copilot-extensions && \
-    echo "✅ Copilot extensions installed:" && \
-    ls -la /opt/copilot-extensions/ && \
-    echo "📋 Copilot extension versions:" && \
-    for ext in /opt/copilot-extensions/*/; do \
-        if [ -f "$ext/package.json" ]; then \
-            name=$(grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "$ext/package.json" | cut -d'"' -f4); \
-            ver=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$ext/package.json" | cut -d'"' -f4); \
-            echo "  - $name: v$ver"; \
-        fi; \
-    done && \
-    rm -rf /tmp/vscode-root && \
-    pkill Xvfb || true && \
-    rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null || true
+    echo "🔎 Validating Copilot extensions were installed..." && \
+    python3 -c "\
+import json, glob, sys;\
+required = {'GitHub.copilot', 'GitHub.copilot-chat'};\
+found = {};\
+[found.setdefault(f\"{json.load(open(d+'/package.json'))['publisher']}.{json.load(open(d+'/package.json'))['name']}\", d) for d in glob.glob('/opt/copilot-extensions/*') if __import__('os').path.isfile(d+'/package.json')];\
+missing = required - set(found);\
+sys.exit(f'❌ Missing extensions: {missing}. Found: {sorted(found)}') if missing else print(f'✅ All required extensions installed: {sorted(found)}')" && \
+    echo "📋 Final /opt/copilot-extensions listing:" && \
+    ls -la /opt/copilot-extensions/
 
 # Use shorter temp dir path to avoid IPC socket path length issues (must be < 103 chars)
 ENV TEST_TEMP_DIR=/tmp/e2e

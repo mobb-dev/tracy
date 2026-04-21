@@ -1,7 +1,18 @@
 import * as path from 'node:path'
-import { fileURLToPath } from 'node:url'
 
+import { fileUriToFsPath } from '../mobbdev_src/utils/url'
 import { logger } from '../shared/logger'
+
+/**
+ * Cross-platform "is this an absolute path?" check. Node's default
+ * `path.isAbsolute` uses the host-platform semantics and rejects Windows
+ * paths like `C:\Users\...` when called on POSIX. The extension can see
+ * Windows paths even when unit tests run on a POSIX CI host, so accept
+ * anything that either POSIX or Win32 considers absolute.
+ */
+function isAnyAbsolute(p: string): boolean {
+  return path.posix.isAbsolute(p) || path.win32.isAbsolute(p)
+}
 
 type ResponseItem = {
   kind?: string
@@ -46,13 +57,8 @@ export function extractFilePathFromRecord(
       continue
     }
     for (const uri of Object.keys(uris)) {
-      let filePath: string
-      try {
-        filePath = uri.startsWith('file://') ? fileURLToPath(uri) : uri
-      } catch {
-        continue
-      }
-      if (path.isAbsolute(filePath)) {
+      const filePath = fileUriToFsPath(uri) ?? uri
+      if (isAnyAbsolute(filePath)) {
         logger.debug(
           { toolId: item.toolId, filePath, source: 'invocationMessage.uris' },
           'extractFilePathFromRecord: resolved'
@@ -62,13 +68,29 @@ export function extractFilePathFromRecord(
     }
   }
 
-  // Strategy 2: textEditGroup uri.path
+  // Strategy 2: textEditGroup uri.path.
+  //
+  // `uri.path` is the URI path component (e.g. "/C:/Users/test/foo.ts" on
+  // Windows), not an fsPath. Reconstruct a file:// URI and run it through
+  // the Windows-aware converter so Strategy 2 doesn't leak URI-form paths
+  // into downstream repo-URL resolution on Windows.
+  //
+  // Only reconstruct when the path starts with "/" (URI path component).
+  // A bare relative path like "relative/file.ts" would be mangled by
+  // `new URL('file://relative/file.ts')` — "relative" becomes the hostname
+  // and "/file.ts" becomes the pathname, producing a false absolute path.
   for (const item of response) {
     if (item.kind !== 'textEditGroup') {
       continue
     }
-    const editPath = item.uri?.path
-    if (editPath && path.isAbsolute(editPath)) {
+    const rawEditPath = item.uri?.path
+    if (!rawEditPath) {
+      continue
+    }
+    const editPath = rawEditPath.startsWith('/')
+      ? (fileUriToFsPath(`file://${rawEditPath}`) ?? rawEditPath)
+      : rawEditPath
+    if (isAnyAbsolute(editPath)) {
       logger.debug(
         { filePath: editPath, source: 'textEditGroup.uri.path' },
         'extractFilePathFromRecord: resolved'

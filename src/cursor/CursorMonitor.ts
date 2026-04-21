@@ -6,7 +6,10 @@ import { CircuitBreaker } from '../shared/CircuitBreaker'
 import { BaseMonitor } from '../shared/IMonitor'
 import { logger } from '../shared/logger'
 import { AppType } from '../shared/repositoryInfo'
-import { uploadCursorRawRecords } from '../shared/uploader'
+import {
+  uploadContextFilesForSession,
+  uploadCursorRawRecords,
+} from '../shared/uploader'
 import { getRecentBubbleKeys, prefetchSessions } from './db'
 import {
   cleanupStaleCursors,
@@ -201,12 +204,20 @@ export class CursorMonitor extends BaseMonitor {
           )
         }
 
-        // 5. Update incomplete bubble lists for sessions not handled in step 4
-        const uploadedSessionIds = new Set(
+        // 4b. Upload new/changed context files for each active session (fire-and-forget).
+        // The scanner's per-session mtime tracking skips unchanged files.
+        const activeSessionIds = new Set(
           allRecords.map((r) => r.metadata.sessionId)
         )
+        for (const sid of activeSessionIds) {
+          uploadContextFilesForSession(sid, 'cursor').catch(() => {
+            // Non-critical — already logged inside the function
+          })
+        }
+
+        // 5. Update incomplete bubble lists for sessions not handled in step 4
         for (const [composerId, incomplete] of allIncomplete) {
-          if (!uploadedSessionIds.has(composerId)) {
+          if (!activeSessionIds.has(composerId)) {
             updateIncompleteBubbles(
               composerId,
               incomplete,

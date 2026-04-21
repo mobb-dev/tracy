@@ -1,6 +1,9 @@
 import * as vscode from 'vscode'
 
-import { registerInlineCompletionTracker } from './copilot/inlineCompletionTracker'
+import {
+  registerInlineCompletionStub,
+  registerInlineCompletionTracker,
+} from './copilot/inlineCompletionTracker'
 import { closeDB, initDB } from './cursor/db'
 import { EXTENSION_NAME } from './env'
 import { AuthManager } from './mobbdev_src/commands/AuthManager'
@@ -19,6 +22,7 @@ import {
   refreshRepositories,
   repoInfo,
 } from './shared/repositoryInfo'
+import { disposeContextFileWorker } from './shared/uploader'
 import { TracyCoordinator } from './ui/TracyCoordinator'
 import { StatusBarView } from './ui/TracyStatusBar'
 
@@ -50,6 +54,11 @@ export async function activate(context: vscode.ExtensionContext) {
     { apiUrl, webAppUrl, isLocalEnv, isDevExtension },
     `Extension environment: ${isLocalEnv ? 'LOCAL' : isDevExtension ? 'DEV' : 'PRODUCTION'}`
   )
+
+  // Register passthrough stub early so the Tab keybinding declared in package.json
+  // never triggers "command not found", even if activation fails or is still in progress.
+  registerInlineCompletionStub(context)
+
   try {
     // Initialize status bar, we need it for auth status updates
     statusBar = initStatusBar(context)
@@ -319,6 +328,8 @@ export async function deactivate(): Promise<void> {
       await monitorManager.stopAllMonitors()
       monitorManager = null
     }
+
+    disposeContextFileWorker()
 
     await closeDB()
 

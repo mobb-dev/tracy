@@ -3,7 +3,6 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
-
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { initGitRepository } from '../shared/git-utils'
@@ -14,7 +13,7 @@ import { CheckpointTracker } from '../shared/test-utilities'
 const CLI_DIST = path.resolve(__dirname, '../../../../cli/dist/index.mjs')
 const UPLOAD_WAIT_TIMEOUT = 30000 // 30 seconds for upload
 const CLAUDE_CODE_TIMEOUT = 30000 // 30 seconds for Claude Code to respond
-const TEST_TIMEOUT = 90000 // 90 seconds total test timeout
+const TEST_TIMEOUT = 120000 // 120 seconds total test timeout
 
 type ClaudeCodeSettings = {
   hooks?: {
@@ -30,7 +29,7 @@ type ClaudeCodeSettings = {
 }
 
 describe('Claude Code E2E with Hook Integration', () => {
-  let testStartTime: number
+  let _testStartTime: number
   let mockServer: MockUploadServer | null = null
   let claudeProcess: ChildProcess | null = null
   let testWorkspaceDir: string | null = null
@@ -46,6 +45,7 @@ describe('Claude Code E2E with Hook Integration', () => {
     'Code Generated',
     'Hook Captured Attribution',
     'Attribution Uploaded',
+    'Context Files Uploaded',
   ])
 
   afterEach(async () => {
@@ -61,7 +61,9 @@ describe('Claude Code E2E with Hook Integration', () => {
         // Wait up to 5 seconds for graceful shutdown
         const shutdownTimeout = setTimeout(() => {
           if (claudeProcess && !claudeProcess.killed) {
-            console.log('  ⚠️  Graceful shutdown timed out, forcing kill (SIGKILL)')
+            console.log(
+              '  ⚠️  Graceful shutdown timed out, forcing kill (SIGKILL)'
+            )
             claudeProcess.kill('SIGKILL')
           }
         }, 5000)
@@ -75,9 +77,16 @@ describe('Claude Code E2E with Hook Integration', () => {
 
     // Kill daemon if running
     try {
-      const pidData = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.mobbdev', 'daemon.pid'), 'utf8'))
+      const pidData = JSON.parse(
+        fs.readFileSync(
+          path.join(os.homedir(), '.mobbdev', 'daemon.pid'),
+          'utf8'
+        )
+      )
       process.kill(pidData.pid, 'SIGKILL')
-    } catch { /* already dead or no pid file */ }
+    } catch {
+      /* already dead or no pid file */
+    }
 
     // Stop mock server
     if (mockServer) {
@@ -112,11 +121,18 @@ describe('Claude Code E2E with Hook Integration', () => {
     async () => {
       // Kill any stale daemon from a previous test run
       try {
-        const pidData = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.mobbdev', 'daemon.pid'), 'utf8'))
+        const pidData = JSON.parse(
+          fs.readFileSync(
+            path.join(os.homedir(), '.mobbdev', 'daemon.pid'),
+            'utf8'
+          )
+        )
         process.kill(pidData.pid, 'SIGKILL')
-      } catch { /* no stale daemon */ }
+      } catch {
+        /* no stale daemon */
+      }
 
-      testStartTime = Date.now()
+      _testStartTime = Date.now()
       tracker.logTimestamp('Test started')
 
       // ==== Step 1: Verify Claude Code is installed ====
@@ -127,7 +143,9 @@ describe('Claude Code E2E with Hook Integration', () => {
         tracker.mark('Claude Code Installed')
       } catch (error) {
         console.error('❌ Claude Code is not installed')
-        console.error('   Install with: npm install -g @anthropic-ai/claude-code')
+        console.error(
+          '   Install with: npm install -g @anthropic-ai/claude-code'
+        )
         throw new Error('Claude Code not found')
       }
 
@@ -179,6 +197,19 @@ describe('Claude Code E2E with Hook Integration', () => {
         '// Test file\nconsole.log("Hello");\n'
       )
 
+      // Create context files that the scanner should detect and upload
+      fs.writeFileSync(
+        path.join(testWorkspaceDir, 'CLAUDE.md'),
+        '# Project Rules\n\nAlways write clean code.\n'
+      )
+      fs.mkdirSync(path.join(testWorkspaceDir, '.claude', 'rules'), {
+        recursive: true,
+      })
+      fs.writeFileSync(
+        path.join(testWorkspaceDir, '.claude', 'rules', 'test-rule.md'),
+        '# Test Rule\n\nUse TypeScript for all new files.\n'
+      )
+
       // Initialize git repo (required for Claude Code)
       await initGitRepository(testWorkspaceDir, {
         commitMessage: 'Initial commit',
@@ -228,7 +259,7 @@ describe('Claude Code E2E with Hook Integration', () => {
       tracker.logTimestamp('Running Claude Code')
 
       const prompt =
-        'Create a file called utils.js with a function that adds two numbers'
+        'Create a file called utils.ts with a function that adds two numbers'
 
       console.log(`  Prompt: "${prompt}"`)
       console.log(`  Working directory: ${testWorkspaceDir}`)
@@ -239,7 +270,13 @@ describe('Claude Code E2E with Hook Integration', () => {
       // Inherit all env vars including AWS_BEARER_TOKEN_BEDROCK, CLAUDE_CODE_USE_BEDROCK, etc.
       claudeProcess = spawn(
         'claude',
-        ['--print', '--debug', '--permission-mode', 'bypassPermissions', prompt],
+        [
+          '--print',
+          '--debug',
+          '--permission-mode',
+          'bypassPermissions',
+          prompt,
+        ],
         {
           cwd: testWorkspaceDir,
           env: {
@@ -247,6 +284,8 @@ describe('Claude Code E2E with Hook Integration', () => {
             API_URL: 'http://localhost:3000/graphql',
             // Use local CLI build so the hook/shim spawns the daemon from source
             MOBBDEV_LOCAL_CLI: CLI_DIST,
+            // Prevent nested-session rejection when running from within a Claude Code session
+            CLAUDECODE: '',
           },
           // stdin: ignore (prevents hanging), stdout/stderr: inherit for visibility
           stdio: ['ignore', 'inherit', 'inherit'],
@@ -254,9 +293,6 @@ describe('Claude Code E2E with Hook Integration', () => {
       )
 
       tracker.mark('Claude Code Prompt Sent')
-
-      // stderr for error reporting (captured from exit code since stdio is inherited)
-      const stderr = 'See console output above'
 
       // Wait for Claude Code to complete
       const exitCode = await new Promise<number>((resolve, reject) => {
@@ -283,14 +319,16 @@ describe('Claude Code E2E with Hook Integration', () => {
       expect(exitCode).toBe(0)
 
       // Check if code was generated
-      const generatedFile = path.join(testWorkspaceDir, 'utils.js')
+      const generatedFile = path.join(testWorkspaceDir, 'utils.ts')
       if (fs.existsSync(generatedFile)) {
-        console.log('  ✅ File generated: utils.js')
+        console.log('  ✅ File generated: utils.ts')
         const content = fs.readFileSync(generatedFile, 'utf-8')
         console.log(`  Content preview: ${content.substring(0, 100)}...`)
         tracker.mark('Code Generated')
       } else {
-        console.log('  ⚠️  utils.js not found, checking other generated files...')
+        console.log(
+          '  ⚠️  utils.ts not found, checking other generated files...'
+        )
         const files = fs.readdirSync(testWorkspaceDir)
         console.log(`  Files in workspace: ${files.join(', ')}`)
       }
@@ -327,7 +365,10 @@ describe('Claude Code E2E with Hook Integration', () => {
       // rawData is uploaded to S3 via presigned URL — retrieve from mock S3 store
       const s3Uploads = mockServer.getS3Uploads()
       const s3Content = s3Uploads.get(record.rawDataS3Key!)
-      expect(s3Content, `S3 upload not found for key: ${record.rawDataS3Key}`).toBeTruthy()
+      expect(
+        s3Content,
+        `S3 upload not found for key: ${record.rawDataS3Key}`
+      ).toBeTruthy()
 
       // Parse the content stored at the S3 key
       const parsedRawData = JSON.parse(s3Content!)
@@ -342,6 +383,71 @@ describe('Claude Code E2E with Hook Integration', () => {
       ]).toContain(parsedRawData.type)
 
       tracker.mark('Attribution Uploaded')
+
+      // ==== Step 9: Validate context file upload ====
+      tracker.logTimestamp('Validating context file upload')
+
+      // Since T-476, each context file is uploaded individually to S3 with its
+      // own Tracy record (recordId = "ctx:{sessionId}:{md5}") and a `context`
+      // metadata field. Poll until both expected files appear.
+      const contextFileTimeout = UPLOAD_WAIT_TIMEOUT
+      const pollStart = Date.now()
+      let claudeMdRecord: (typeof allContextRecords)[0] | undefined
+      let testRuleRecord: (typeof allContextRecords)[0] | undefined
+      let allContextRecords: ReturnType<
+        typeof mockServer.getCapturedTracyRecords
+      > = []
+      while (Date.now() - pollStart < contextFileTimeout) {
+        allContextRecords = mockServer
+          .getCapturedTracyRecords()
+          .filter((r) => r.recordId?.startsWith('ctx:') && r.context)
+        claudeMdRecord = allContextRecords.find(
+          (r) => r.context?.name === 'CLAUDE.md'
+        )
+        testRuleRecord = allContextRecords.find((r) =>
+          r.context?.filePath?.includes('.claude/rules/test-rule.md')
+        )
+        if (claudeMdRecord && testRuleRecord) {
+          break
+        }
+        await new Promise((r) => setTimeout(r, 1000))
+      }
+
+      console.log(`  Context file records: ${allContextRecords.length} files`)
+      for (const r of allContextRecords) {
+        console.log(`    - ${r.context?.name} (${r.context?.category})`)
+      }
+
+      // Verify workspace CLAUDE.md was captured
+      expect(
+        claudeMdRecord,
+        'CLAUDE.md should be in context records'
+      ).toBeTruthy()
+      expect(claudeMdRecord!.context?.category).toBe('rule')
+      expect(claudeMdRecord!.platform).toBe('CLAUDE_CODE')
+      const s3ForClaude = mockServer
+        .getS3Uploads()
+        .get(claudeMdRecord!.rawDataS3Key!)
+      const expectedClaudeMd = '# Project Rules\n\nAlways write clean code.\n'
+      expect(s3ForClaude).toBe(expectedClaudeMd)
+      expect(s3ForClaude).toHaveLength(expectedClaudeMd.length)
+
+      // Verify .claude/rules/test-rule.md was captured
+      expect(
+        testRuleRecord,
+        '.claude/rules/test-rule.md should be in context records'
+      ).toBeTruthy()
+      expect(testRuleRecord!.context?.category).toBe('rule')
+      const s3ForTestRule = mockServer
+        .getS3Uploads()
+        .get(testRuleRecord!.rawDataS3Key!)
+      const expectedTestRule =
+        '# Test Rule\n\nUse TypeScript for all new files.\n'
+      expect(s3ForTestRule).toBe(expectedTestRule)
+      expect(s3ForTestRule).toHaveLength(expectedTestRule.length)
+
+      console.log('  ✅ Context files uploaded and validated')
+      tracker.mark('Context Files Uploaded')
 
       // ==== Success ====
       tracker.logTimestamp('Test completed successfully')

@@ -98,4 +98,34 @@ describe('extractFilePathFromRecord', () => {
     const record = makeRecord([])
     expect(extractFilePathFromRecord(record)).toBeUndefined()
   })
+
+  // Windows URIs: Copilot on Windows emits URIs like `file:///C:/Users/...`
+  // (literal colon) and `file:///c%3A/Users/...` (percent-encoded). Node's
+  // default fileURLToPath uses host-platform semantics, so the extension
+  // running on a non-Windows host would decode those as POSIX-looking
+  // "/C:/Users/..." strings. The Windows-aware conversion must yield an
+  // OS fsPath regardless of host.
+  const windowsPathRegex = /^[Cc]:[\\/]Users[\\/]test[\\/]foo\.ts$/
+
+  it('Strategy 1: Windows URI (literal drive letter) → Windows fsPath', () => {
+    const record = makeRecord([
+      toolItem({ 'file:///C:/Users/test/foo.ts': {} }),
+    ])
+    expect(extractFilePathFromRecord(record)).toMatch(windowsPathRegex)
+  })
+
+  it('Strategy 1: Windows URI with %3A-encoded drive colon → Windows fsPath', () => {
+    const record = makeRecord([
+      toolItem({ 'file:///c%3A/Users/test/foo.ts': {} }),
+    ])
+    expect(extractFilePathFromRecord(record)).toMatch(windowsPathRegex)
+  })
+
+  it('Strategy 2: textEditGroup with Windows-form uri.path → Windows fsPath', () => {
+    // item.uri.path is the URI path component, not an fsPath. The client
+    // must reconstruct the URI and apply Windows-aware conversion, or
+    // downstream getNormalizedRepo's startsWith compare silently misses.
+    const record = makeRecord([textEditItem('/C:/Users/test/foo.ts')])
+    expect(extractFilePathFromRecord(record)).toMatch(windowsPathRegex)
+  })
 })

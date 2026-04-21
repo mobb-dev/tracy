@@ -38,20 +38,29 @@ const workerBuild = {
   outfile: 'out/dbWorker.js',
 }
 
+// Loaded at runtime via: new Worker(path.join(__dirname, 'contextFileWorker.js'))
+const contextFileWorkerBuild = {
+  ...sharedOptions,
+  entryPoints: ['src/shared/contextFileWorker.ts'],
+  outfile: 'out/contextFileWorker.js',
+}
+
 try {
   if (isWatch) {
     // Note: watch mode only bundles — it does not type-check.
     // Use your IDE for live type errors, or run `npm run typecheck` separately.
-    const [mainCtx, workerCtx] = await Promise.all([
+    const [mainCtx, workerCtx, ctxFileWorkerCtx] = await Promise.all([
       esbuild.context(mainBuild),
       esbuild.context(workerBuild),
+      esbuild.context(contextFileWorkerBuild),
     ])
-    await Promise.all([mainCtx.watch(), workerCtx.watch()])
+    await Promise.all([mainCtx.watch(), workerCtx.watch(), ctxFileWorkerCtx.watch()])
     console.log('[esbuild] Watching for changes...')
   } else {
     await Promise.all([
       esbuild.build(mainBuild),
       esbuild.build(workerBuild),
+      esbuild.build(contextFileWorkerBuild),
     ])
     console.log('[esbuild] Build complete')
   }

@@ -10,9 +10,39 @@ import { logger } from '../shared/logger'
 import { getNormalizedRepoUrl } from '../shared/repositoryInfo'
 import { uploadTracyRecords } from '../shared/uploader'
 
+// Tracks the stub disposable so it can be disposed when upgrading to full tracker
+let stubDisposable: vscode.Disposable | null = null
+let stubFiredCount = 0
+
+/**
+ * Register a passthrough stub for the Tab keybinding so it never triggers
+ * "command not found". Call this early in activation, before async init.
+ * The stub simply delegates to the default inline suggest commit.
+ */
+export function registerInlineCompletionStub(
+  context: vscode.ExtensionContext
+): void {
+  stubDisposable = vscode.commands.registerCommand(
+    'mobb.acceptInlineCompletion',
+    async () => {
+      stubFiredCount++
+      if (stubFiredCount <= 3) {
+        logger.warn(
+          `Inline completion accepted in passthrough mode (tracker not initialized). Count: ${stubFiredCount}`
+        )
+      }
+      await vscode.commands.executeCommand('editor.action.inlineSuggest.commit')
+    }
+  )
+  context.subscriptions.push(stubDisposable)
+  logger.debug('Registered inline completion passthrough stub')
+}
+
 /**
  * Tracks Copilot inline completion acceptances by intercepting the Tab key
  * when an inline suggestion is visible (via VS Code context key).
+ *
+ * Upgrades the passthrough stub (registered early) to the full tracking handler.
  *
  * Flow:
  * 1. User sees Copilot ghost text → `inlineSuggestionVisible` context key is true
@@ -25,6 +55,12 @@ import { uploadTracyRecords } from '../shared/uploader'
 export function registerInlineCompletionTracker(
   context: vscode.ExtensionContext
 ): void {
+  // Dispose the passthrough stub before registering the full handler
+  if (stubDisposable) {
+    stubDisposable.dispose()
+    stubDisposable = null
+  }
+
   const disposable = vscode.commands.registerCommand(
     'mobb.acceptInlineCompletion',
     async () => {
@@ -77,7 +113,7 @@ export function registerInlineCompletionTracker(
   )
 
   context.subscriptions.push(disposable)
-  logger.debug('Registered Copilot inline completion tracker')
+  logger.debug('Upgraded inline completion stub to full tracker')
 }
 
 /**

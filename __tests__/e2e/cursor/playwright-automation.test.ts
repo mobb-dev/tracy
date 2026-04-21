@@ -640,7 +640,11 @@ test.describe('Cursor Extension E2E with UI Automation', () => {
     })
 
     // (#1) Assert outer record shape + (#2) deep rawData validation
-    for (const record of firstBatchRecords) {
+    // Filter out CONTEXT_FILES records (ctx:*) which have different rawData structure
+    const bubbleRecords = firstBatchRecords.filter(
+      (r) => !r.recordId.startsWith('ctx:')
+    )
+    for (const record of bubbleRecords) {
       assertTracyRecordShape(record, mockServer)
     }
 
@@ -658,8 +662,9 @@ test.describe('Cursor Extension E2E with UI Automation', () => {
       Math.max(2, Math.floor(firstBatchRecords.length * 0.2))
     )
 
-    // Verify all records share the same sessionId (same composer session)
-    const firstBatchRawData = firstBatchRecords.map((r) => decodeTracyRawData(r, mockServer))
+    // Verify all bubble records share the same sessionId (same composer session)
+    // CONTEXT_FILES records (ctx:*) don't have metadata.sessionId, so use bubbleRecords
+    const firstBatchRawData = bubbleRecords.map((r) => decodeTracyRawData(r, mockServer))
     const firstBatchSessionIds = new Set(
       firstBatchRawData.map((d) => d.metadata.sessionId)
     )
@@ -670,6 +675,61 @@ test.describe('Cursor Extension E2E with UI Automation', () => {
       sessionId: firstBatchRawData[0].metadata.sessionId,
       model: firstBatchRawData[0].metadata.model,
     })
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Phase 1.5: Verify context files were uploaded
+    // Must run BEFORE clearTracyRecords() — context files upload fire-and-
+    // forget alongside Phase 1 regular records. markContextFilesUploaded()
+    // deduplicates by mtime, so they are never re-uploaded after the clear.
+    // ═══════════════════════════════════════════════════════════════════════
+    tracker.logTimestamp('Validating context file upload')
+
+    // Since T-476, each context file is uploaded individually to S3 with its
+    // own Tracy record (recordId = "ctx:{sessionId}:{md5}") and a `context`
+    // metadata field. Poll until both expected files appear.
+    const ctxPollStart = Date.now()
+    let cursorRulesRecord: ReturnType<typeof mockServer.getCapturedTracyRecords>[0] | undefined
+    let testRuleRecord: ReturnType<typeof mockServer.getCapturedTracyRecords>[0] | undefined
+    let allContextRecords: ReturnType<typeof mockServer.getCapturedTracyRecords> = []
+    while (Date.now() - ctxPollStart < UPLOAD_WAIT_TIMEOUT) {
+      allContextRecords = mockServer
+        .getCapturedTracyRecords()
+        .filter((r) => r.recordId?.startsWith('ctx:') && r.context)
+      cursorRulesRecord = allContextRecords.find(
+        (r) => r.context?.name === '.cursorrules'
+      )
+      testRuleRecord = allContextRecords.find((r) =>
+        r.context?.filePath?.includes('.cursor/rules/test-rule.mdc')
+      )
+      if (cursorRulesRecord && testRuleRecord) break
+      await new Promise((r) => setTimeout(r, 1000))
+    }
+
+    tracker.logTimestamp('Context file records received', {
+      fileCount: allContextRecords.length,
+      files: allContextRecords.map((r) => `${r.context?.name} (${r.context?.category})`),
+    })
+
+    // Verify .cursorrules was captured
+    expect(cursorRulesRecord, '.cursorrules should be in context records').toBeTruthy()
+    expect(cursorRulesRecord!.context?.category).toBe('rule')
+    const s3ForCursorRules = mockServer.getS3Uploads().get(cursorRulesRecord!.rawDataS3Key!)
+    const expectedCursorRules =
+      'Always use TypeScript for new files.\nFollow functional programming patterns.\n'
+    expect(s3ForCursorRules).toBe(expectedCursorRules)
+    expect(s3ForCursorRules).toHaveLength(expectedCursorRules.length)
+
+    // Verify .cursor/rules/test-rule.mdc was captured
+    expect(
+      testRuleRecord,
+      '.cursor/rules/test-rule.mdc should be in context records'
+    ).toBeTruthy()
+    expect(testRuleRecord!.context?.category).toBe('rule')
+    const s3ForTestRule = mockServer.getS3Uploads().get(testRuleRecord!.rawDataS3Key!)
+    expect(s3ForTestRule).toContain('Use strict TypeScript')
+    expect(s3ForTestRule).toContain('no-any rule')
+
+    tracker.logTimestamp('Context files validated')
 
     // ═══════════════════════════════════════════════════════════════════════
     // Phase 2: Send second prompt, verify new records + no duplicates
@@ -722,11 +782,6 @@ test.describe('Cursor Extension E2E with UI Automation', () => {
         duplicatesFound: secondBatchDuplicates,
       }
     )
-
-    // TODO: Phase 3 — Human edit E2E test
-    // Typing directly in the editor after AI generation requires navigating
-    // away from Cursor's diff view to an editable file. Deferred to a
-    // dedicated test case that opens a file explicitly before typing.
   })
 
   // ═════════════════════════════════════════════════════════════════════════

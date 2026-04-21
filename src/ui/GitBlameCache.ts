@@ -10,6 +10,7 @@ import {
 } from '../mobbdev_src/utils/blame/gitBlameUtils'
 import { createGitWithLogging } from '../mobbdev_src/utils/gitUtils'
 import { logger } from '../shared/logger'
+import { pathsEqual } from '../shared/pathUtils'
 
 export type GitBlameLineInfo = BlameLineInfo
 
@@ -43,7 +44,7 @@ export class GitBlameCache {
             }
           }[]
         | undefined
-    )?.find((r) => r.rootUri.fsPath === this.repoPath)
+    )?.find((r) => pathsEqual(r.rootUri.fsPath, this.repoPath))
     if (!repo) {
       logger.warn(
         `GitBlameCache: No git repository found for ${this.repoPath}, HEAD listener not set up.`

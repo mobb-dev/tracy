@@ -32,6 +32,15 @@ export type InferenceUpload = {
   }>
 }
 
+export type ContextFileMeta = {
+  md5: string
+  category: string
+  name: string
+  sizeBytes: number
+  filePath: string
+  sessionId: string
+}
+
 export type TracyRecord = {
   platform: string
   recordId: string
@@ -45,6 +54,7 @@ export type TracyRecord = {
   editType?: string
   filePath?: string
   additions?: string
+  context?: ContextFileMeta
 }
 
 export class MockUploadServer {
@@ -323,11 +333,12 @@ export class MockUploadServer {
           // Content comes after double CRLF
           const contentStart = part.indexOf('\r\n\r\n')
           if (contentStart !== -1) {
-            // Remove trailing boundary markers
+            // Remove only the multipart encapsulation CRLF (added by the protocol
+            // before each boundary delimiter). Do NOT trim — file content may have
+            // a legitimate trailing newline that would be incorrectly stripped.
             fileContent = part
               .slice(contentStart + 4)
-              .replace(/\r\n--.*$/, '')
-              .trim()
+              .replace(/\r\n$/, '')
           }
         }
       }

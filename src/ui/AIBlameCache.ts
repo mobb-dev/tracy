@@ -109,14 +109,27 @@ export class AIBlameCache {
   // Strips gitRoot prefix and normalizes separators to produce a repo-relative
   // POSIX path that matches what the server stores in attribution.filePath.
   // Falls back to a plain POSIX-normalized path when gitRoot is unavailable.
+  //
+  // Windows-specific: the incoming filePath (from `document.uri.fsPath`) is
+  // typically lowercase-drive + backslashes (e.g. `c:\Users\x\repo\foo.ts`),
+  // while this.gitRoot (from git CLI) is typically uppercase-drive + forward
+  // slashes (e.g. `C:/Users/x/repo`). After converting both to POSIX
+  // separators we still need a case-insensitive prefix check on Windows, or
+  // every attribution lookup silently returns the full absolute path and
+  // misses the attribution index.
   private toRepoRelativePath(filePath: string): string {
     const posix = filePath.replace(/\\/g, '/')
     if (!this.gitRoot) {
       return posix
     }
     const root = this.gitRoot.replace(/\\/g, '/').replace(/\/$/, '')
-    if (posix.startsWith(`${root}/`)) {
-      return posix.slice(root.length + 1)
+    const prefix = `${root}/`
+    const caseInsensitive = process.platform === 'win32'
+    const matches = caseInsensitive
+      ? posix.toLowerCase().startsWith(prefix.toLowerCase())
+      : posix.startsWith(prefix)
+    if (matches) {
+      return posix.slice(prefix.length)
     }
     return posix
   }

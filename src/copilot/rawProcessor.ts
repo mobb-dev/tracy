@@ -18,6 +18,12 @@ export type CopilotRawRecord = {
     message: { text: string }
     response: unknown[]
     result: unknown
+    /** Prompt file / instructions variables attached to the request.
+     *  Populated from the `variableData` field in the local VS Code session JSONL.
+     *  Used server-side to detect copilot-instructions.md, prompt files, etc. */
+    variableData?: unknown
+    /** File references attached to the request. */
+    contentReferences?: unknown
   }
   metadata: {
     sessionId: string
@@ -52,6 +58,11 @@ export type SessionFileState = {
       modelState?: { value?: number; completedAt?: number }
       /** result from kind:2 (old format has it inline) */
       result?: unknown
+      /** Prompt file / instructions references attached to the request
+       *  (kind:"promptFile" entries for .github/copilot-instructions.md etc.). */
+      variableData?: unknown
+      /** Content references attached to the request (file references etc.). */
+      contentReferences?: unknown
       /** When this request was first seen (for stuck request detection) */
       firstSeenAt: number
     }
@@ -457,6 +468,8 @@ export function processLines(
         message: { text: data.message.text ?? '' },
         response: data.response,
         result: patch?.result ?? data.result ?? null,
+        variableData: data.variableData,
+        contentReferences: data.contentReferences,
       },
       metadata: {
         sessionId: state.sessionId ?? '',
@@ -496,6 +509,8 @@ function trackRequestData(
     // Preserve modelState/result from kind:2 (old format) — only update if present
     modelState: newMs?.completedAt ? newMs : existing?.modelState,
     result: req['result'] ?? existing?.result,
+    variableData: req['variableData'] ?? existing?.variableData,
+    contentReferences: req['contentReferences'] ?? existing?.contentReferences,
     firstSeenAt: existing?.firstSeenAt ?? Date.now(),
   })
 }

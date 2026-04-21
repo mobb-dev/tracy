@@ -13,7 +13,11 @@ import { getConfig } from '../shared/config'
 import { BaseMonitor } from '../shared/IMonitor'
 import { logger } from '../shared/logger'
 import { AppType, getNormalizedRepoUrl } from '../shared/repositoryInfo'
-import { uploadCopilotRawRecords, uploadTracyRecords } from '../shared/uploader'
+import {
+  uploadContextFilesForSession,
+  uploadCopilotRawRecords,
+  uploadTracyRecords,
+} from '../shared/uploader'
 import { LogContextRecord } from './events/LogContextRecord'
 import { LogContextWatcher } from './logContextWatcher'
 import {
@@ -244,6 +248,19 @@ export class CopilotMonitor extends BaseMonitor {
             { heartbeat: true },
             `Uploaded ${allRecords.length} record(s) from ${sessionFiles.length} file(s)`
           )
+
+          // Upload new/changed context files for each active session (fire-and-forget).
+          // The scanner's per-session mtime tracking skips unchanged files.
+          const activeSessionIds = new Set(
+            allRecords
+              .map((r) => r.metadata?.sessionId)
+              .filter((s): s is string => !!s)
+          )
+          for (const sid of activeSessionIds) {
+            uploadContextFilesForSession(sid, 'copilot').catch(() => {
+              // Non-critical — already logged inside the function
+            })
+          }
         }
 
         // Advance cursors for ALL read files — even those with 0 records.

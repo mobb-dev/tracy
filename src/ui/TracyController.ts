@@ -3,6 +3,7 @@ import * as vscode from 'vscode'
 
 import { BlameLineInfo } from '../mobbdev_src/utils/blame/gitBlameUtils'
 import { logger } from '../shared/logger'
+import { canonicalizeRepoPath } from '../shared/pathUtils'
 import { AIBlameAttribution, AIBlameCache } from './AIBlameCache'
 import { GitBlameCache } from './GitBlameCache'
 import { InfoPanel } from './TracyInfoPanel'
@@ -501,12 +502,14 @@ export class TracyController {
     if (!this.gitRoot) {
       return true
     }
-    // Normalize separators so the check works on Windows too.
-    const normalizedFile = filePath.split(path.sep).join('/')
-    const normalizedRoot = this.gitRoot.split(path.sep).join('/')
+    // Canonicalize so Windows case/separator differences between git CLI
+    // output (e.g. "C:/Users/x/repo") and VS Code fsPath
+    // (e.g. "c:\Users\x\repo") compare equal.
+    const canonicalFile = canonicalizeRepoPath(filePath)
+    const canonicalRoot = canonicalizeRepoPath(this.gitRoot)
     return (
-      normalizedFile === normalizedRoot ||
-      normalizedFile.startsWith(`${normalizedRoot}/`)
+      canonicalFile === canonicalRoot ||
+      canonicalFile.startsWith(canonicalRoot + path.sep)
     )
   }
 

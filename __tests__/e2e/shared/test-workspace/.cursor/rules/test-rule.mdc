@@ -1,0 +1,6 @@
+---
+description: Test rule for E2E validation
+globs: **/*.ts
+---
+
+Use strict TypeScript with no-any rule.

@@ -9,6 +9,7 @@ import { GitService } from '../mobbdev_src/features/analysis/scm/services/GitSer
 import { parseScmURL } from '../mobbdev_src/features/analysis/scm/shared/src/urlParser'
 import { createGQLClient } from './gqlClientFactory'
 import { logger } from './logger'
+import { canonicalizeRepoPath, pathsEqual, toOsPath } from './pathUtils'
 
 export let repoInfo: RepositoryInfo | null = null
 
@@ -394,7 +395,7 @@ export async function getWorkspaceGitRepositories(
     const isRepo = await gitService.isGitRepository()
 
     if (isRepo) {
-      const gitRoot = await gitService.getGitRoot()
+      const gitRoot = canonicalizeRepoPath(await gitService.getGitRoot())
       const gitUrl = await gitService.getRemoteUrl()
 
       if (gitUrl) {
@@ -424,7 +425,10 @@ export async function getWorkspaceGitRepositories(
             if (repoIsGit) {
               const gitUrl = await repoGitService.getRemoteUrl()
               if (gitUrl) {
-                return { gitRoot: repoPath, gitRepoUrl: gitUrl }
+                return {
+                  gitRoot: canonicalizeRepoPath(repoPath),
+                  gitRepoUrl: gitUrl,
+                }
               }
               logger.warn(`Repository ${repoPath} has no remote URL, skipping`)
             }
@@ -507,15 +511,19 @@ export function getRelevantRepo(filePath?: string): GitRepository | null {
   } else if (repoInfo.repositories.length === 1) {
     return repoInfo.repositories[0]
   } else if (filePath) {
+    // Canonicalize so Windows case/separator differences between git CLI
+    // output, path.join, and VS Code fsPath all compare equal.
+    const canonicalFile = canonicalizeRepoPath(filePath)
     // Sort by longest gitRoot first to prefer the most specific match
     // (avoids /project matching /project-utils)
     const sorted = [...repoInfo.repositories].sort(
       (a, b) => b.gitRoot.length - a.gitRoot.length
     )
     for (const repo of sorted) {
+      const canonicalRoot = canonicalizeRepoPath(repo.gitRoot)
       if (
-        filePath.startsWith(repo.gitRoot + path.sep) ||
-        filePath === repo.gitRoot
+        canonicalFile === canonicalRoot ||
+        canonicalFile.startsWith(canonicalRoot + path.sep)
       ) {
         return repo
       }
@@ -556,7 +564,7 @@ async function discoverRepoFromFilePath(
       return null
     }
 
-    const gitRoot = await gitService.getGitRoot()
+    const gitRoot = canonicalizeRepoPath(await gitService.getGitRoot())
     const gitUrl = await gitService.getRemoteUrl()
     if (!gitUrl) {
       return null
@@ -566,7 +574,9 @@ async function discoverRepoFromFilePath(
 
     // Add to in-memory list so future lookups don't need git CLI
     if (repoInfo) {
-      const exists = repoInfo.repositories.some((r) => r.gitRoot === gitRoot)
+      const exists = repoInfo.repositories.some((r) =>
+        pathsEqual(r.gitRoot, gitRoot)
+      )
       if (!exists) {
         repoInfo.repositories.push(repo)
         logger.info(`Discovered repo from file path: ${gitRoot} → ${gitUrl}`)
@@ -588,17 +598,18 @@ async function discoverRepoFromFilePath(
 export async function getNormalizedRepo(
   filePath?: string
 ): Promise<GitRepository | null> {
-  let repo = getRelevantRepo(filePath)
+  const normalized = filePath ? toOsPath(filePath) : undefined
+  let repo = getRelevantRepo(normalized)
 
   // If no repo found and we have a filePath, try refreshing repos in case new ones were added
-  if (!repo && filePath) {
+  if (!repo && normalized) {
     logger.info(
-      `No repository found for file path: ${filePath}, refreshing repository list`
+      `No repository found for file path: ${normalized}, refreshing repository list`
     )
     const refreshed = await refreshRepositories()
 
     if (refreshed) {
-      repo = getRelevantRepo(filePath)
+      repo = getRelevantRepo(normalized)
 
       if (repo) {
         logger.info(`Found repository after refresh: ${repo.gitRoot}`)
@@ -608,13 +619,13 @@ export async function getNormalizedRepo(
     // Still not found — try discovering the repo directly from the file path.
     // Handles worktrees and repos outside the workspace folders.
     if (!repo) {
-      repo = await discoverRepoFromFilePath(filePath)
+      repo = await discoverRepoFromFilePath(normalized)
     }
   }
 
   if (!repo) {
-    if (filePath) {
-      logger.warn(`No git repository found for file path: ${filePath}`)
+    if (normalized) {
+      logger.warn(`No git repository found for file path: ${normalized}`)
     }
     return null
   }

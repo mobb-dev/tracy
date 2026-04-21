@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import {
+  canonicalizeRepoPath,
+  pathsEqual,
+  toOsPath,
+} from '../src/shared/pathUtils'
 import type {
   GitRepository,
   RepositoryInfo,
@@ -143,6 +148,151 @@ describe('getRelevantRepo', () => {
     }
     _setRepoInfoForTesting(makeRepoInfo([repoA, repoB]))
     expect(getRelevantRepo()).toBeNull()
+  })
+})
+
+describe('toOsPath', () => {
+  it('converts a POSIX file:// URI to an OS path', () => {
+    expect(toOsPath('file:///home/user/project/file.ts')).toBe(
+      '/home/user/project/file.ts'
+    )
+  })
+
+  it('decodes URL-encoded characters in the URI', () => {
+    // %20 = space
+    expect(toOsPath('file:///home/user/my%20project/file.ts')).toBe(
+      '/home/user/my project/file.ts'
+    )
+  })
+
+  it('passes through bare OS paths unchanged (POSIX)', () => {
+    expect(toOsPath('/home/user/project/file.ts')).toBe(
+      '/home/user/project/file.ts'
+    )
+  })
+
+  it('passes through bare OS paths unchanged (Windows-style)', () => {
+    // A Windows path like "C:\Users\..." does not start with "file://",
+    // so it must be returned as-is on any host platform.
+    expect(toOsPath('C:\\Users\\test\\project\\file.ts')).toBe(
+      'C:\\Users\\test\\project\\file.ts'
+    )
+  })
+
+  it('passes through empty strings unchanged', () => {
+    expect(toOsPath('')).toBe('')
+  })
+
+  it('converts a Windows file:// URI with a literal drive letter to an OS path', () => {
+    // toOsPath delegates to fileUriToFsPath which detects the Windows
+    // drive-letter pattern and converts to Windows fsPath regardless of
+    // host platform. No leading "/" — that was the old broken behavior.
+    const result = toOsPath('file:///C:/Users/test/webgoat/foo.ts')
+    expect(result).toMatch(/^[Cc]:[\\/]Users[\\/]test[\\/]webgoat[\\/]foo\.ts$/)
+  })
+
+  it('decodes a URL-encoded drive-letter colon (%3A) in a Windows URI', () => {
+    const result = toOsPath('file:///c%3A/Users/test/webgoat/foo.ts')
+    expect(result).toMatch(/^[Cc]:[\\/]Users[\\/]test[\\/]webgoat[\\/]foo\.ts$/)
+  })
+})
+
+describe('canonicalizeRepoPath', () => {
+  // `canonicalizeRepoPath` reads `process.platform` at call time (not module
+  // load), so toggling the global is enough to exercise the Windows branch
+  // on a POSIX CI host. Note that this does NOT patch `path.normalize`'s
+  // platform — the function handles Windows separator conversion with an
+  // explicit `.split('/').join('\\')` after the platform check, so the
+  // expected output is correct regardless of host platform.
+  const originalPlatform = process.platform
+  const setPlatform = (p: NodeJS.Platform) => {
+    Object.defineProperty(process, 'platform', { value: p, configurable: true })
+  }
+
+  afterEach(() => {
+    setPlatform(originalPlatform)
+  })
+
+  it('leaves POSIX paths case-intact on non-Windows hosts', () => {
+    setPlatform('darwin')
+    expect(canonicalizeRepoPath('/Users/dev/Repo')).toBe('/Users/dev/Repo')
+    expect(canonicalizeRepoPath('/users/dev/repo')).toBe('/users/dev/repo')
+  })
+
+  it('collapses .. segments on POSIX', () => {
+    setPlatform('darwin')
+    expect(canonicalizeRepoPath('/Users/dev/../dev/repo')).toBe(
+      '/Users/dev/repo'
+    )
+  })
+
+  it('lowercases drive letter on Windows', () => {
+    setPlatform('win32')
+    expect(canonicalizeRepoPath('C:\\Users\\dev\\repo')).toBe(
+      'c:\\Users\\dev\\repo'
+    )
+    expect(canonicalizeRepoPath('c:\\Users\\dev\\repo')).toBe(
+      'c:\\Users\\dev\\repo'
+    )
+  })
+
+  it('converts forward slashes to backslashes on Windows', () => {
+    setPlatform('win32')
+    expect(canonicalizeRepoPath('C:/Users/dev/repo')).toBe(
+      'c:\\Users\\dev\\repo'
+    )
+  })
+
+  it('produces identical output for git-CLI and path.join forms on Windows', () => {
+    // Real-world: git rev-parse --show-toplevel returns forward slashes
+    // with uppercase drive letter; path.join / VS Code fsPath returns
+    // backslashes with whatever case VS Code gave (often lowercase).
+    setPlatform('win32')
+    const fromGit = canonicalizeRepoPath('C:/Users/test/webgoat')
+    const fromPathJoin = canonicalizeRepoPath('c:\\Users\\test\\webgoat')
+    expect(fromGit).toBe(fromPathJoin)
+  })
+})
+
+describe('pathsEqual', () => {
+  const originalPlatform = process.platform
+  const setPlatform = (p: NodeJS.Platform) => {
+    Object.defineProperty(process, 'platform', { value: p, configurable: true })
+  }
+
+  afterEach(() => {
+    setPlatform(originalPlatform)
+  })
+
+  it('returns true for identical POSIX paths', () => {
+    setPlatform('darwin')
+    expect(pathsEqual('/Users/dev/repo', '/Users/dev/repo')).toBe(true)
+  })
+
+  it('is case-sensitive on POSIX', () => {
+    setPlatform('darwin')
+    expect(pathsEqual('/Users/Dev/Repo', '/users/dev/repo')).toBe(false)
+  })
+
+  it('is case-insensitive on Windows for the drive letter', () => {
+    setPlatform('win32')
+    expect(
+      pathsEqual('C:\\Users\\test\\webgoat', 'c:\\Users\\test\\webgoat')
+    ).toBe(true)
+  })
+
+  it('treats forward and back slashes equivalently on Windows', () => {
+    setPlatform('win32')
+    expect(
+      pathsEqual('C:/Users/test/webgoat', 'c:\\Users\\test\\webgoat')
+    ).toBe(true)
+  })
+
+  it('distinguishes different directories on Windows', () => {
+    setPlatform('win32')
+    expect(
+      pathsEqual('c:\\Users\\test\\webgoat', 'c:\\Users\\test\\other')
+    ).toBe(false)
   })
 })
 
