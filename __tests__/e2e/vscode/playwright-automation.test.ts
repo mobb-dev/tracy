@@ -11,18 +11,45 @@ import { _electron as electron } from 'playwright'
 
 import { decodeAndDecompressBase64 } from '../shared/compression-utils'
 import { initGitRepository } from '../shared/git-utils'
+import type { TracyRecord } from '../shared/mock-server'
 import { MockUploadServer } from '../shared/mock-server'
+import {
+  MOCK_API_URL_DEFAULT,
+  MOCK_MOBB_API_URL_DEFAULT,
+  MOCK_SERVER_DEFAULT_PORT,
+  MOCK_WEB_APP_URL,
+  TEST_MOBB_API_TOKEN,
+} from '../shared/test-config'
 import { CheckpointTracker } from '../shared/test-utilities'
-import { extractVSIX } from '../shared/vsix-installer'
+import {
+  decodeCopilotRawData as decodeCopilotRawDataShared,
+  dumpExtensionsJson,
+  forceEnableCopilotInStateDb,
+  installExtensionViaCli,
+  patchExtensionsJsonRemoveBuiltinFlags,
+  resolveVSCodeCliPath,
+} from '../shared/vscode-test-helpers'
 import { createVSCodeState } from './helpers/create-vscode-state'
 import {
   loadCredentialsFromEnv,
   performDeviceFlowOAuth,
 } from './helpers/device-flow-oauth'
+import {
+  captureExtensionLogs,
+  captureExtensionOutput,
+  dismissDialogs,
+  focusCopilotInput,
+  openCopilotChat,
+  typeAndSubmitPrompt,
+  waitForCopilotGenerationAndAccept,
+} from './vscode-ui-helpers'
 import { getVSCodeExecutablePath } from './vscode-helper'
 
-// Test configuration
-const TEST_TIMEOUT = 120000 // 2 minutes for infrastructure-only test (no AI generation)
+// Test configuration — full Copilot interaction needs 6 minutes on a slow runner
+const TEST_TIMEOUT = 360000 // 6 minutes
+const AI_RESPONSE_TIMEOUT = 90000 // 90 seconds for Copilot to respond
+const UPLOAD_WAIT_TIMEOUT = 60000 // 60 seconds for tracy upload (extension polls every 5s)
+const EXTENSION_POLL_INTERVAL = 5000
 
 // Safe screenshot helper with timeout and error handling
 const SCREENSHOT_TIMEOUT = 15000 // 15 seconds max for screenshots
@@ -49,43 +76,89 @@ async function safeScreenshot(
   }
 }
 
-/**
- * VS Code Extension E2E Test (Infrastructure-Only)
- *
- * This test validates the Mobb AI Tracer extension's infrastructure in VS Code:
- * - CHECKPOINT 1: VS Code installation
- * - CHECKPOINT 2: Copilot extension installation
- * - CHECKPOINT 3: Mobb extension installation
- * - CHECKPOINT 4: Extension authentication with mock server
- *
- * ⚠️ NOTE: This is an infrastructure-only test
- * Full E2E testing (Copilot AI generation + inference capture) is NOT viable
- * in headless Docker due to VS Code Electron renderer GPU initialization failures.
- *
- * Root cause: ERROR:components/viz/service/main/viz_main_impl.cc:189
- * Exiting GPU process due to errors during initialization
- *
- * See: clients/tracer_ext/__tests__/e2e/README.md for full investigation details.
+/** Thin wrapper over the shared helper that upgrades the two pre-conditions
+ * into Playwright `expect()` assertions so a missing S3 upload surfaces in
+ * the test report rather than a bare thrown Error.
  */
-test.describe('VS Code Extension E2E (Infrastructure-Only)', () => {
+function decodeCopilotRawData(
+  record: TracyRecord,
+  server: MockUploadServer
+): {
+  request: { requestId: string; modelId?: string; timestamp?: number }
+  metadata: { sessionId: string; workspaceRepos?: unknown }
+} {
+  expect(record.rawDataS3Key).toBeTruthy()
+  expect(
+    server.getS3Uploads().get(record.rawDataS3Key!),
+    `S3 upload not found for key: ${record.rawDataS3Key}`
+  ).toBeTruthy()
+  return decodeCopilotRawDataShared(record, server)
+}
+
+/** Assert the full tracy record shape for a Copilot chat record. */
+function assertCopilotRecordShape(
+  record: TracyRecord,
+  server: MockUploadServer
+): void {
+  expect(record.platform).toBe('COPILOT')
+  expect(record.recordId).toBeTruthy()
+  expect(record.recordTimestamp).toBeTruthy()
+  expect(new Date(record.recordTimestamp).getTime()).toBeGreaterThan(0)
+  expect(record.blameType).toBe('CHAT')
+  expect(record.clientVersion).toMatch(/^\d+\.\d+\.\d+/)
+  expect(record.computerName).toBeTruthy()
+  expect(record.userName).toBeTruthy()
+
+  const rawData = decodeCopilotRawData(record, server)
+  expect(rawData.request).toBeDefined()
+  expect(rawData.request.requestId).toBeTruthy()
+  expect(rawData.metadata).toBeDefined()
+  expect(rawData.metadata.sessionId).toBeTruthy()
+}
+
+/**
+ * VS Code Extension E2E Test — Copilot interaction
+ *
+ * CHECKPOINT 1: VS Code installed
+ * CHECKPOINT 2: Copilot extension installed
+ * CHECKPOINT 3: Mobb extension installed
+ * CHECKPOINT 4: Extension authenticated with mock server
+ * CHECKPOINT 5: Copilot AI prompt sent
+ * CHECKPOINT 6: Code generated
+ * CHECKPOINT 7: Tracy records uploaded
+ * CHECKPOINT 8: Context files uploaded
+ *
+ * The full flow runs on every invocation. `VSCODE_STATE_VSCDB_B64` must
+ * be set to a portable state.vscdb captured from a Copilot-licensed
+ * account; Device Flow OAuth is the fallback.
+ */
+test.describe('VS Code Extension E2E (Copilot)', () => {
   let testStartTime: number
   let mockServer: MockUploadServer
   let electronApp: ElectronApplication
   let mainWindow: Page
   let testProfileDir: string
   let vscodePid: number | undefined
+  let hasRealAuth = false
+  // Set to true when the extension host reports an expired GitHub/Copilot
+  // token, so we can gracefully skip the AI-interaction checkpoints instead
+  // of hanging on a tracy-upload timeout.
+  let copilotAuthInvalid = false
 
-  // Initialize checkpoint tracker
   const tracker = new CheckpointTracker([
     'VS Code Installed',
     'Copilot Installed',
     'Extension Installed',
     'Mock Server Running',
     'Extension Authenticated',
+    'AI Prompt Sent',
+    'Code Generated',
+    'Tracy Records Uploaded',
+    'Context Files Uploaded',
   ])
 
   test.beforeAll(async () => {
-    mockServer = new MockUploadServer(3000)
+    mockServer = new MockUploadServer(MOCK_SERVER_DEFAULT_PORT)
     await mockServer.start()
     console.log('✅ Mock server started')
     tracker.mark('Mock Server Running')
@@ -127,10 +200,10 @@ test.describe('VS Code Extension E2E (Infrastructure-Only)', () => {
     // Create VS Code settings
     const settingsPath = path.join(testProfileDir, 'User', 'settings.json')
     const testSettings = {
-      'mobbAiTracer.apiUrl': 'http://localhost:3000/graphql',
-      'mobbAiTracer.webAppUrl': 'http://localhost:5173',
-      'mobbAiTracerDev.apiUrl': 'http://localhost:3000/graphql',
-      'mobbAiTracerDev.webAppUrl': 'http://localhost:5173',
+      'mobbAiTracer.apiUrl': MOCK_API_URL_DEFAULT,
+      'mobbAiTracer.webAppUrl': MOCK_WEB_APP_URL,
+      'mobbAiTracerDev.apiUrl': MOCK_API_URL_DEFAULT,
+      'mobbAiTracerDev.webAppUrl': MOCK_WEB_APP_URL,
       'github.copilot.enable': {
         '*': true,
         plaintext: true,
@@ -151,12 +224,17 @@ test.describe('VS Code Extension E2E (Infrastructure-Only)', () => {
       // WARNING: This disables critical security protections - only for testing!
       'chat.tools.global.autoApprove': true,
       'chat.tools.terminal.autoApprove': true,
+      // Don't block extensions that lack signatures in test runs. VS Code
+      // 1.103+ defaults this to true and quietly disables side-loaded exts.
+      'extensions.verifySignature': false,
+      'extensions.autoUpdate': false,
+      'extensions.autoCheckUpdates': false,
     }
     fs.writeFileSync(settingsPath, JSON.stringify(testSettings, null, 2))
     console.log('✅ Created VS Code settings with mock server URL')
 
     // Setup auth from pre-built credentials or fallback methods
-    await setupAuth(globalStorageDir)
+    hasRealAuth = await setupAuth(globalStorageDir)
 
     // Setup extensions directory
     const extensionsDir = path.join(testProfileDir, 'User', 'extensions')
@@ -172,6 +250,13 @@ test.describe('VS Code Extension E2E (Infrastructure-Only)', () => {
 
   test.afterEach(async () => {
     tracker.logTimestamp('Cleanup started (afterEach)')
+
+    // Archive all extension logs BEFORE profile cleanup
+    captureExtensionLogs(testProfileDir)
+    dumpExtensionsJson(
+      path.join(testProfileDir, 'User', 'extensions'),
+      'afterEach'
+    )
 
     // Close VS Code
     if (vscodePid) {
@@ -428,13 +513,24 @@ test.describe('VS Code Extension E2E (Infrastructure-Only)', () => {
         '--disable-dev-shm-usage',
         '--disable-gpu',
         '--password-store=basic', // Use basic password store for infrastructure-only testing
+        // Copilot + Copilot Chat declare proposed API usage in their
+        // package.json. Without this flag VS Code silently disables them at
+        // startup. Use space-separated form (Electron sometimes mis-parses
+        // `=` form in extension.js-hosted flags). Also try comma-joined.
+        '--enable-proposed-api',
+        'GitHub.copilot',
+        '--enable-proposed-api',
+        'GitHub.copilot-chat',
+        // Disable gallery so VS Code doesn't try to "sync" extensions and
+        // uninstall side-loaded ones it considers not-in-gallery.
+        '--disable-telemetry',
         `--folder-uri=${workspaceFolderUri}`,
       ],
       env: {
         ...process.env,
-        API_URL: 'http://localhost:3000/graphql',
-        MOBB_API_URL: 'http://localhost:3000',
-        MOBB_API_TOKEN: 'test-token',
+        API_URL: MOCK_API_URL_DEFAULT,
+        MOBB_API_URL: MOCK_MOBB_API_URL_DEFAULT,
+        MOBB_API_TOKEN: TEST_MOBB_API_TOKEN,
         NODE_ENV: 'test',
         // CRITICAL: Disable proxy for localhost connections
         // The extension's GraphQL client uses HTTP_PROXY/HTTPS_PROXY but doesn't
@@ -449,7 +545,11 @@ test.describe('VS Code Extension E2E (Infrastructure-Only)', () => {
     vscodePid = electronApp.process()?.pid
     console.log(`📍 VS Code PID: ${vscodePid}`)
 
-    // Log console messages for debugging
+    // Reset per-test auth-error flag
+    copilotAuthInvalid = false
+
+    // Log console messages for debugging and watch for the specific Copilot
+    // auth-expired signal so we can downgrade to infrastructure-only cleanly.
     mainWindow.on('console', (msg) => {
       const text = msg.text()
       // Skip only the most noisy deprecation warnings
@@ -461,10 +561,17 @@ test.describe('VS Code Extension E2E (Infrastructure-Only)', () => {
       ) {
         return // Skip logging these specific messages
       }
+      if (
+        text.includes('Your GitHub token is invalid') ||
+        text.includes('sign out from your GitHub account')
+      ) {
+        copilotAuthInvalid = true
+      }
       console.log(`  [Console ${msg.type()}] ${text}`)
     })
 
     await mainWindow.waitForLoadState('domcontentloaded')
+    await safeScreenshot(mainWindow, 'test-results/vs-01-loaded.png')
 
     try {
       await mainWindow.waitForSelector('.monaco-workbench', { timeout: 10000 })
@@ -473,8 +580,13 @@ test.describe('VS Code Extension E2E (Infrastructure-Only)', () => {
       await mainWindow.waitForTimeout(3000)
       tracker.logTimestamp('VS Code ready (fallback timeout)')
     }
-    // Screenshot removed - causes crash in headless mode due to GPU initialization failures
-    // await safeScreenshot(mainWindow, 'test-results/20-vscode-ready.png')
+    await safeScreenshot(mainWindow, 'test-results/vs-02-workbench-ready.png')
+
+    // Post-launch diagnostic dump — did VS Code modify extensions.json?
+    dumpExtensionsJson(
+      path.join(testProfileDir, 'User', 'extensions'),
+      'post-launch'
+    )
 
     // DEBUGGING: Pause here to allow VNC inspection
     if (process.env.ENABLE_VNC_DEBUG === 'true') {
@@ -523,7 +635,6 @@ test.describe('VS Code Extension E2E (Infrastructure-Only)', () => {
       console.log('CHECKPOINT 4: Mobb Extension Logged In')
       console.log('═'.repeat(60))
 
-      // Wait longer for extension to activate (30 seconds)
       const activationStartTime = Date.now()
       const activationTimeout = 30000
       console.log('  Waiting for extension activation (up to 30s)...')
@@ -543,46 +654,207 @@ test.describe('VS Code Extension E2E (Infrastructure-Only)', () => {
       const requests = mockServer.getRequestLog()
       console.log(`  Mock server requests: ${requests.length}`)
 
-      // ⚠️ NOTE: In headless Docker, VS Code crashes due to GPU initialization failures
-      // (ERROR:viz_main_impl.cc:189), so the extension never activates.
-      // This is a known platform limitation, not a test failure.
-      // See LESSONS.md Challenge 22 for details.
+      expect(
+        requests.length,
+        'Extension made no GraphQL requests — activation failed'
+      ).toBeGreaterThan(0)
 
-      if (requests.length === 0) {
-        console.log(
-          '  ⚠️  Extension did not make any requests (expected in headless mode)'
-        )
-        console.log(
-          '     Reason: VS Code crashes due to GPU initialization failures'
-        )
-        console.log(
-          '     This validates packaging/installation only (checkpoints 1-3)'
-        )
-      } else {
-        // Check for Me query (authentication check)
-        const meQuery = requests.find((r) => r.body?.operationName === 'Me')
-        const hasLoginActivity =
-          requests.some(
-            (r) => r.body?.operationName === 'CreateCommunityUser'
-          ) || requests.some((r) => r.body?.operationName === 'getLastOrg')
+      const meQuery = requests.find((r) => r.body?.operationName === 'Me')
+      const hasLoginActivity =
+        requests.some((r) => r.body?.operationName === 'CreateCommunityUser') ||
+        requests.some((r) => r.body?.operationName === 'getLastOrg')
 
-        if (meQuery && hasLoginActivity) {
-          console.log('  ✅ Extension activated and authenticated')
-          console.log(`  ✅ Made ${requests.length} GraphQL requests`)
-          tracker.mark('Extension Authenticated')
-        } else {
-          console.log(
-            `  ⚠️  Extension made ${requests.length} requests but login incomplete`
-          )
-        }
-      }
+      expect(
+        meQuery,
+        'Extension did not call Me query — auth handshake missing'
+      ).toBeTruthy()
+      expect(
+        hasLoginActivity,
+        'Extension did not perform login/org resolution'
+      ).toBeTruthy()
 
-      // Screenshot removed - causes crash in headless mode
-      // await safeScreenshot(mainWindow, 'test-results/30-mobb-extension-logged-in.png')
-      console.log('  ℹ️  CHECKPOINT 4: See notes above\n')
+      console.log('  Extension activated and authenticated')
+      console.log(`  Made ${requests.length} GraphQL requests`)
+      tracker.mark('Extension Authenticated')
     })
 
-    // Print final summary
+    // Copilot interaction checkpoints require a working state.vscdb. If the
+    // test secret is missing or decoding failed, fail fast with an actionable
+    // message — a silent infra-only pass hid regressions in the past.
+    if (!hasRealAuth) {
+      throw new Error(
+        'No Copilot auth available. Set VSCODE_STATE_VSCDB_B64 ' +
+          '(see scripts/refresh-vscode-auth.sh) or provide Device Flow ' +
+          'credentials (PLAYWRIGHT_GH_CLOUD_USER_EMAIL/PASSWORD).'
+      )
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CHECKPOINT 5: Copilot AI Prompt Sent
+    // ═══════════════════════════════════════════════════════════════════════════
+    const uniqueId = Date.now()
+    const prompt = `Create a new file called utils-${uniqueId}.js with a simple add function that adds two numbers`
+
+    await test.step('CHECKPOINT 5: Copilot AI Prompt Sent', async () => {
+      console.log(`\n${'═'.repeat(60)}`)
+      console.log('CHECKPOINT 5: Copilot AI Prompt Sent')
+      console.log('═'.repeat(60))
+
+      await dismissDialogs(mainWindow)
+      await safeScreenshot(mainWindow, 'test-results/vs-03-dialogs-dismissed.png')
+      await openCopilotChat(mainWindow)
+      await safeScreenshot(mainWindow, 'test-results/vs-04-copilot-chat-open.png')
+      const focused = await focusCopilotInput(mainWindow)
+      console.log(`  Chat input focused: ${focused}`)
+
+      await typeAndSubmitPrompt(mainWindow, prompt)
+      tracker.mark('AI Prompt Sent')
+      tracker.logTimestamp('Prompt submitted')
+      await safeScreenshot(mainWindow, 'test-results/vs-05-prompt-submitted.png')
+    })
+
+    // Surface auth errors loudly — if the Copilot GitHub token is invalid,
+    // we want CI to fail with a clear message pointing at the secret to
+    // refresh, not silently pass.
+    await mainWindow.waitForTimeout(3000)
+    if (copilotAuthInvalid) {
+      throw new Error(
+        'Copilot reports GitHub token is invalid/expired. ' +
+          'Refresh GITHUB_COPILOT_PAT (or VSCODE_STATE_VSCDB_B64) and rerun.'
+      )
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CHECKPOINT 6: Code Generated
+    // ═══════════════════════════════════════════════════════════════════════════
+    await test.step('CHECKPOINT 6: Code Generated', async () => {
+      console.log(`\n${'═'.repeat(60)}`)
+      console.log('CHECKPOINT 6: Code Generated')
+      console.log('═'.repeat(60))
+
+      // Give Copilot a moment to start streaming before we look for completion.
+      await mainWindow.waitForTimeout(3000)
+      await safeScreenshot(mainWindow, 'test-results/vs-06-generating.png')
+
+      const detected = await waitForCopilotGenerationAndAccept(
+        mainWindow,
+        AI_RESPONSE_TIMEOUT
+      )
+      if (detected) {
+        tracker.mark('Code Generated')
+      } else {
+        console.log(
+          '  Completion UI not detected — upload wait will still verify the record pipeline'
+        )
+      }
+      tracker.logTimestamp('Copilot generation phase complete')
+      await safeScreenshot(mainWindow, 'test-results/vs-07-generation-complete.png')
+    })
+
+    // Capture extension output (best-effort) for CI debugging
+    try {
+      await captureExtensionOutput(mainWindow, electronApp)
+    } catch (err) {
+      console.log(`  captureExtensionOutput skipped: ${err}`)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CHECKPOINT 7: Tracy Records Uploaded
+    // ═══════════════════════════════════════════════════════════════════════════
+    await test.step('CHECKPOINT 7: Tracy Records Uploaded', async () => {
+      console.log(`\n${'═'.repeat(60)}`)
+      console.log('CHECKPOINT 7: Tracy Records Uploaded')
+      console.log('═'.repeat(60))
+
+      try {
+        await mockServer.waitForTracyRecords(1, {
+          timeout: UPLOAD_WAIT_TIMEOUT,
+          logInterval: EXTENSION_POLL_INTERVAL,
+        })
+      } catch (err) {
+        captureExtensionLogs(testProfileDir)
+        throw err
+      }
+
+      // The presence of tracy records is the authoritative signal that
+      // Copilot generated a response. The UI-button detection in
+      // CHECKPOINT 6 is optional (not every Copilot response triggers an
+      // edit-approval flow — text replies don't).
+      tracker.mark('Code Generated')
+
+      const records = mockServer.getCapturedTracyRecords()
+      expect(records.length).toBeGreaterThanOrEqual(1)
+      console.log(`  Tracy records received: ${records.length}`)
+
+      // Filter out per-file context records (recordId prefix `ctx:`) which
+      // have a `context` metadata field and are validated in CHECKPOINT 8.
+      const chatRecords = records.filter((r) => !r.recordId.startsWith('ctx:'))
+      console.log(
+        `  Copilot chat records: ${chatRecords.length} (filtered ${records.length - chatRecords.length} context)`
+      )
+      expect(
+        chatRecords.length,
+        'No Copilot chat records captured (only context-file records)'
+      ).toBeGreaterThanOrEqual(1)
+
+      for (let i = 0; i < Math.min(chatRecords.length, 3); i++) {
+        assertCopilotRecordShape(chatRecords[i], mockServer)
+      }
+
+      tracker.mark('Tracy Records Uploaded')
+      tracker.logTimestamp('Tracy records validated', {
+        count: records.length,
+        chatRecords: chatRecords.length,
+      })
+    })
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CHECKPOINT 8: Context Files Uploaded
+    // ═══════════════════════════════════════════════════════════════════════════
+    await test.step('CHECKPOINT 8: Context Files Uploaded', async () => {
+      console.log(`\n${'═'.repeat(60)}`)
+      console.log('CHECKPOINT 8: Context Files Uploaded')
+      console.log('═'.repeat(60))
+
+      // Since T-476, each context file is uploaded individually to S3 with its
+      // own Tracy record (recordId = "ctx:{sessionId}:{md5}") and a `context`
+      // metadata field. Poll until the expected file appears.
+      const ctxPollStart = Date.now()
+      let allContextRecords: ReturnType<
+        typeof mockServer.getCapturedTracyRecords
+      > = []
+      let copilotInstructionsRecord:
+        | (typeof allContextRecords)[0]
+        | undefined
+      while (Date.now() - ctxPollStart < UPLOAD_WAIT_TIMEOUT) {
+        allContextRecords = mockServer
+          .getCapturedTracyRecords()
+          .filter((r) => r.recordId?.startsWith('ctx:') && r.context)
+        // Copilot's context-file scanner reads .github/copilot-instructions.md
+        // (not .cursorrules — that's Cursor's convention). The shared test
+        // workspace ships a matching file.
+        copilotInstructionsRecord = allContextRecords.find((r) =>
+          r.context?.name?.endsWith('copilot-instructions.md')
+        )
+        if (copilotInstructionsRecord) break
+        await new Promise((r) => setTimeout(r, 1000))
+      }
+
+      console.log(`  Context file records: ${allContextRecords.length} files`)
+      for (const r of allContextRecords) {
+        console.log(`    - ${r.context?.name} (${r.context?.category})`)
+      }
+
+      expect(
+        copilotInstructionsRecord,
+        '.github/copilot-instructions.md should be in context records'
+      ).toBeTruthy()
+      expect(copilotInstructionsRecord!.context?.category).toBe('rule')
+
+      tracker.mark('Context Files Uploaded')
+      tracker.logTimestamp('Context files validated')
+    })
+
     tracker.logTimestamp('Test completed')
   })
 })
@@ -590,6 +862,35 @@ test.describe('VS Code Extension E2E (Infrastructure-Only)', () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // Helper Functions
 // ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * PRIORITY 0 (highest): Build state.vscdb from a GitHub PAT.
+ *
+ * The cleanest "token ready to apply" path — the PAT is long-lived, lives
+ * in the __tests__/.env dotenv-vault, and the createVSCodeState helper
+ * turns it into a valid state.vscdb on any platform (no safeStorage /
+ * machine-bound encryption involved).
+ *
+ * Env: GITHUB_COPILOT_PAT — a PAT owned by a Copilot-licensed GitHub
+ * account (e.g. citestjob@mobb.ai), pulled from PLAYWRIGHT_GH_CLOUD_PAT.
+ */
+async function loadAuthFromPAT(globalStorageDir: string): Promise<boolean> {
+  const pat = process.env.GITHUB_COPILOT_PAT
+  if (!pat) return false
+
+  console.log(
+    `🔐 Using GITHUB_COPILOT_PAT (PAT-based auth, ${pat.length} chars)`
+  )
+  try {
+    const targetPath = path.join(globalStorageDir, 'state.vscdb')
+    await createVSCodeState(pat, targetPath)
+    console.log(`✅ Wrote fresh state.vscdb from PAT`)
+    return true
+  } catch (err) {
+    console.log(`⚠️ Failed to build state.vscdb from PAT: ${err}`)
+    return false
+  }
+}
 
 /**
  * PRIORITY 1: Load auth from base64-encoded env var (primary method for CI/Docker)
@@ -745,7 +1046,8 @@ function loadAuthFromLocalInstallation(globalStorageDir: string): boolean {
 }
 
 /**
- * PRIORITY 5: Load auth via Device Flow OAuth (fallback only - requires credentials)
+ * PRIORITY 0: Load auth via Device Flow OAuth (primary path — yields a fresh
+ * OAuth token that the GitHub Authentication provider + Copilot Chat accept).
  */
 async function loadAuthFromDeviceFlow(
   globalStorageDir: string
@@ -753,18 +1055,10 @@ async function loadAuthFromDeviceFlow(
   const credentials = loadCredentialsFromEnv()
 
   if (!credentials) {
-    console.log('⚠️ No auth available - tests will fail at Copilot step')
-    console.log('   To enable auth, either:')
-    console.log(
-      '   1. Set VSCODE_STATE_VSCDB_B64 secret (run scripts/create-docker-auth.sh)'
-    )
-    console.log(
-      '   2. Or set PLAYWRIGHT_GH_CLOUD_USER_EMAIL/PASSWORD for Device Flow OAuth'
-    )
-    return false
+    return false // caller falls through to other priority paths
   }
 
-  console.log('🔐 No pre-existing auth - attempting Device Flow OAuth...')
+  console.log('🔐 Running Device Flow OAuth to mint a fresh GitHub token...')
   console.log(`   Account: ${credentials.email}`)
 
   try {
@@ -797,73 +1091,136 @@ async function loadAuthFromDeviceFlow(
  * Setup authentication for VS Code by trying multiple methods in priority order
  */
 async function setupAuth(globalStorageDir: string): Promise<boolean> {
-  // Try each auth method in priority order
-  if (loadAuthFromBase64EnvVar(globalStorageDir)) return true
-  if (loadAuthFromDirectory(globalStorageDir)) return true
-  if (loadAuthFromLocalFile(globalStorageDir)) return true
-  if (loadAuthFromLocalInstallation(globalStorageDir)) return true
-  if (await loadAuthFromDeviceFlow(globalStorageDir)) return true
+  // IMPORTANT ordering: use the pre-captured state.vscdb FIRST. That secret
+  // comes from a portable profile that interactively clicked through every
+  // sign-in + AI-features modal, so it has the opt-in markers VS Code 1.116
+  // checks at launch. A Device-Flow-minted state.vscdb lacks those markers
+  // and leaves the AI-features modal sitting in front of the chat panel.
+  let ok = false
+  if (loadAuthFromBase64EnvVar(globalStorageDir)) ok = true
+  else if (loadAuthFromDirectory(globalStorageDir)) ok = true
+  else if (loadAuthFromLocalFile(globalStorageDir)) ok = true
+  else if (loadAuthFromLocalInstallation(globalStorageDir)) ok = true
+  else if (await loadAuthFromDeviceFlow(globalStorageDir)) ok = true
+  else if (await loadAuthFromPAT(globalStorageDir)) ok = true
 
-  // No auth method succeeded
+  if (ok) {
+    // ATTEMPT 4: Write explicit enablement state into state.vscdb so VS Code
+    // treats Copilot + Copilot Chat as user-enabled, bypassing the
+    // filterEnabledExtensions "is disabled" path. This uses the
+    // ExtensionEnablementService's storage key format.
+    forceEnableCopilotInStateDb(
+      path.join(globalStorageDir, 'state.vscdb')
+    )
+    return true
+  }
+
   console.log('⚠️ No VS Code auth available - Copilot will not work')
   console.log(
-    '   Run scripts/create-docker-auth.sh to create Linux-native auth'
+    '   Set PLAYWRIGHT_GH_CLOUD_USER_EMAIL/PASSWORD for Device Flow,'
   )
+  console.log('   or GITHUB_COPILOT_PAT, or VSCODE_STATE_VSCDB_B64.')
   return false
 }
 
 /**
- * Install GitHub Copilot extensions from Docker or local VS Code
+ * Install GitHub Copilot + Copilot Chat extensions into the per-test profile
+ * using `code --install-extension <vsix>`. Going through the CLI (rather than
+ * copying unpacked folders) generates the signature files (`.sigzip`) and
+ * registry entries that VS Code 1.103+ requires before enabling an extension.
+ * Without this, startup logs `filterEnabledExtensions: extension '...' is
+ * disabled` and Copilot never fires.
+ *
+ * VSIX files live in $COPILOT_VSIX_DIR in CI (downloaded in the workflow).
+ * For local runs we fall back to $HOME/.vscode/extensions folder copies.
  */
 async function installCopilotExtensions(extensionsDir: string): Promise<void> {
-  let copilotInstalled = false
-  const copilotExtensionsDir = '/opt/copilot-extensions'
+  const vsixDir = process.env.COPILOT_VSIX_DIR
+  if (vsixDir && fs.existsSync(vsixDir)) {
+    const vsixFiles = fs
+      .readdirSync(vsixDir)
+      .filter((f) => f.toLowerCase().endsWith('.vsix'))
+      .map((f) => path.join(vsixDir, f))
 
-  // Try Docker pre-installed location first
-  if (fs.existsSync(copilotExtensionsDir)) {
-    const copilotExtensions = fs.readdirSync(copilotExtensionsDir)
-    for (const ext of copilotExtensions) {
-      const src = path.join(copilotExtensionsDir, ext)
-      const dst = path.join(extensionsDir, ext)
-      if (fs.statSync(src).isDirectory() && !fs.existsSync(dst)) {
-        fs.cpSync(src, dst, { recursive: true })
-        console.log(`📦 Copied Copilot extension: ${ext}`)
-        copilotInstalled = true
-      }
+    if (vsixFiles.length === 0) {
+      console.log(`⚠️ No VSIX files found in ${vsixDir}`)
     }
+
+    for (const vsix of vsixFiles) {
+      installViaCli(vsix, extensionsDir)
+    }
+
+    // VS Code 1.103+ ships `github.copilot-chat` as a built-in and refuses to
+    // install the marketplace VSIX on top of it ("built-in extension cannot
+    // be downgraded"). `code --install-extension` fails silently and leaves
+    // chat out of the per-profile extensions dir. Fall back to copying the
+    // built-in directly — mirrors what the Docker image already does.
+    ensureCopilotChatBuiltin(extensionsDir)
+    return
   }
 
-  // Fallback: Try copying from local VS Code installation
-  if (!copilotInstalled) {
-    const homeDir =
-      process.platform === 'win32'
-        ? process.env.USERPROFILE || ''
-        : process.env.HOME || ''
-    const localExtensionsDir = path.join(homeDir, '.vscode/extensions')
+  // Local-dev fallback: copy from user's ~/.vscode/extensions. This path
+  // doesn't produce signature files so only works on local VS Code installs
+  // that trust side-loaded extensions.
+  const homeDir =
+    process.platform === 'win32'
+      ? process.env.USERPROFILE || ''
+      : process.env.HOME || ''
+  const localExtensionsDir = path.join(homeDir, '.vscode/extensions')
+  if (!fs.existsSync(localExtensionsDir)) {
+    console.log(
+      '⚠️ COPILOT_VSIX_DIR unset and no local ~/.vscode/extensions — Copilot will not be available'
+    )
+    return
+  }
 
-    if (localExtensionsDir && fs.existsSync(localExtensionsDir)) {
-      const localExts = fs.readdirSync(localExtensionsDir)
-      const copilotExts = localExts.filter(
-        (e) =>
-          e.startsWith('github.copilot-') || e.startsWith('github.copilot-chat')
-      )
-
-      for (const ext of copilotExts) {
-        const src = path.join(localExtensionsDir, ext)
-        const dst = path.join(extensionsDir, ext)
-        if (fs.statSync(src).isDirectory() && !fs.existsSync(dst)) {
-          fs.cpSync(src, dst, { recursive: true })
-          console.log(`📦 Copied local Copilot extension: ${ext}`)
-          copilotInstalled = true
-        }
-      }
+  const copilotExts = fs
+    .readdirSync(localExtensionsDir)
+    .filter(
+      (e) =>
+        e.startsWith('github.copilot-') || e.startsWith('github.copilot-chat')
+    )
+  for (const ext of copilotExts) {
+    const src = path.join(localExtensionsDir, ext)
+    const dst = path.join(extensionsDir, ext)
+    if (fs.statSync(src).isDirectory() && !fs.existsSync(dst)) {
+      fs.cpSync(src, dst, { recursive: true })
+      console.log(`📦 Copied local Copilot extension: ${ext}`)
     }
+  }
+}
 
-    if (!copilotInstalled) {
-      console.log(
-        '⚠️ Copilot extensions not found - install GitHub Copilot in VS Code first'
-      )
-    }
+/**
+ * If `github.copilot-chat` didn't land via the CLI install (VS Code 1.103+
+ * refuses to install the marketplace VSIX over the shipped built-in), copy
+ * the built-in from the VS Code install directory. No-op if chat is already
+ * present or the built-in path doesn't exist.
+ */
+function ensureCopilotChatBuiltin(extensionsDir: string): void {
+  const hasChat = fs
+    .readdirSync(extensionsDir)
+    .some((e) => e.startsWith('github.copilot-chat'))
+  if (hasChat) return
+
+  const builtinChat = '/usr/share/code/resources/app/extensions/copilot'
+  if (!fs.existsSync(builtinChat)) {
+    console.log(
+      `  ⚠️ copilot-chat missing and built-in not found at ${builtinChat}`
+    )
+    return
+  }
+
+  try {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(builtinChat, 'package.json'), 'utf8')
+    ) as { version: string }
+    const dst = path.join(extensionsDir, `github.copilot-chat-${pkg.version}`)
+    fs.cpSync(builtinChat, dst, { recursive: true })
+    console.log(
+      `  📦 Copied built-in copilot-chat v${pkg.version} → ${path.basename(dst)}`
+    )
+  } catch (err) {
+    console.log(`  ⚠️ Failed to copy built-in copilot-chat: ${String(err)}`)
   }
 }
 
@@ -900,19 +1257,43 @@ async function installMobbExtension(extensionsDir: string): Promise<void> {
     throw new Error('VSIX file not found. Run "npm run package:test" first.')
   }
 
-  extractVSIX(vsixPath, extensionsDir, {
-    readMetadata: true,
-    verifyFiles: ['package.json', 'out/extension.js'],
-    verbose: true,
-  })
+  // Use `code --install-extension` so the Mobb entry lands in the per-profile
+  // extensions.json registry. Without that, VS Code ignores the folder even
+  // though it exists on disk.
+  installViaCli(vsixPath, extensionsDir)
+}
+
+/** Local adapter that derives profileDir/cliPath once per call. */
+function installViaCli(vsixPathOrId: string, extensionsDir: string): void {
+  const cliPath = resolveVSCodeCliPath(getVSCodeExecutablePath())
+  const profileDir = path.dirname(path.dirname(extensionsDir))
+  installExtensionViaCli(cliPath, vsixPathOrId, profileDir, extensionsDir)
 }
 
 /**
  * Install all required extensions (Copilot + Mobb Tracy)
  */
 async function installExtensions(extensionsDir: string): Promise<void> {
+  // ATTEMPT 1: install via gallery ID (exercises VS Code's gallery install
+  // flow — might write different extensions.json metadata than VSIX install).
+  // Falls back to VSIX-path install if this fails or COPILOT_VSIX_DIR is set.
+  for (const id of ['GitHub.copilot-chat', 'GitHub.copilot']) {
+    installViaCli(id, extensionsDir)
+  }
+
+  // ATTEMPT 2 (fallback): install from local VSIX files
   await installCopilotExtensions(extensionsDir)
+
   await installMobbExtension(extensionsDir)
+
+  dumpExtensionsJson(extensionsDir, 'after-install')
+
+  // ATTEMPT 3: patch extensions.json — strip the isBuiltin /
+  // isApplicationScoped flags that VS Code stamps on github.copilot* after
+  // contacting the marketplace, since those flags trigger the filterEnabled
+  // "is disabled" path.
+  patchExtensionsJsonRemoveBuiltinFlags(extensionsDir)
+  dumpExtensionsJson(extensionsDir, 'after-patch')
 }
 
 

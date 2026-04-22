@@ -21,6 +21,15 @@ const sharedOptions = {
   // resolution starts from clients/cli/ which may lack tracer_ext's deps.
   // nodePaths provides a fallback so those deps are still found here.
   nodePaths: [path.resolve('node_modules')],
+  // `jsonc-parser`'s UMD `main` uses dynamic `require('./impl/...')` that
+  // esbuild can't statically trace, which breaks at runtime with
+  // "Cannot find module './impl/format'". Alias to the ESM entry which is
+  // fully analyzable. Narrow alias (not mainFields: ['module', 'main'])
+  // because global ESM-first resolution breaks CJS-default-import interop
+  // in other deps (e.g. `bitbucket`).
+  alias: {
+    'jsonc-parser': path.resolve('node_modules/jsonc-parser/lib/esm/main.js'),
+  },
 }
 
 // Main extension entry point

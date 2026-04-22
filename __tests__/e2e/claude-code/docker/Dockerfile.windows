@@ -1,0 +1,52 @@
+# escape=`
+
+# Windows Server Core base for Claude Code E2E testing
+# NOTE: Windows containers require a Windows Docker host (cannot build/run on macOS or Linux)
+#
+# IMPORTANT: Windows Docker layer commits are extremely slow (~60-120s each).
+# Every RUN instruction creates a new layer. To keep build times reasonable,
+# we minimize the number of RUN instructions — even at the cost of readability.
+FROM mcr.microsoft.com/windows/servercore:ltsc2022
+
+SHELL ["powershell", "-Command", "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue';"]
+
+# Layer 1: Install ALL system dependencies in a single RUN.
+# Chocolatey + Node.js + Git + Claude Code + pnpm — one layer commit.
+RUN [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; `
+    iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1')); `
+    choco install -y nodejs-lts; `
+    choco install -y git --params "'/GitAndUnixToolsOnPath'"; `
+    $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + `
+        [System.Environment]::GetEnvironmentVariable('Path', 'User'); `
+    npm install -g @anthropic-ai/claude-code pnpm@10; `
+    Write-Host "node: $(node --version)"; `
+    Write-Host "npm: $(npm --version)"; `
+    Write-Host "git: $(git --version)"; `
+    Write-Host "claude: $(claude --version)"
+
+# Set environment variables
+ENV API_URL=http://localhost:3000/graphql
+ENV TEST_TEMP_DIR=C:\\temp\\e2e
+ENV MOBBDEV_LOCAL_CLI=C:\\workspace\\clients\\cli\\dist\\index.mjs
+
+WORKDIR C:/workspace
+
+# COPY layers are cheap (no process execution, fast commits)
+COPY pnpm-lock.yaml ./
+COPY pnpm-workspace.yaml ./
+COPY package.json ./
+COPY clients/cli ./clients/cli
+COPY clients/tracer_ext/__tests__ ./clients/tracer_ext/__tests__
+COPY clients/tracer_ext/package.json ./clients/tracer_ext/package.json
+COPY clients/tracer_ext/__tests__/e2e/claude-code/docker/entrypoint.windows.ps1 C:/entrypoint.ps1
+
+# Layer 2: Install ALL npm/pnpm deps and build CLI in a single RUN.
+# One layer commit for all node_modules instead of two separate slow commits.
+RUN Set-Location C:\workspace\clients\tracer_ext; `
+    npm install; `
+    Set-Location C:\workspace\clients\cli; `
+    pnpm install; `
+    pnpm run build; `
+    Set-Location C:\workspace\clients\tracer_ext
+
+CMD ["powershell", "-File", "C:\\entrypoint.ps1"]

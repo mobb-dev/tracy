@@ -80,11 +80,11 @@ cd clients/tracer_ext
 npm run test:e2e:cursor:local
 
 # Docker testing (CI-like)
-npm run test:e2e:cursor:full
+npm run test:e2e:cursor:docker
 
 # With authentication (full inference test)
 npm run e2e:refresh-cursor-auth   # Export Cursor login
-npm run test:e2e:cursor:full
+npm run test:e2e:cursor:docker
 ```
 
 ### VS Code + Copilot Tests
@@ -96,11 +96,11 @@ cd clients/tracer_ext
 npm run test:e2e:vscode:local
 
 # Docker testing (CI-like)
-npm run test:e2e:vscode:full
+npm run test:e2e:vscode:docker
 
 # With authentication (full inference test)
 npm run e2e:refresh-vscode-auth   # Export VS Code login
-npm run test:e2e:vscode:full
+npm run test:e2e:vscode:docker
 ```
 
 ## CI (GitHub Actions)
@@ -190,7 +190,7 @@ For CI: Add contents as GitHub secret `VSCODE_STATE_VSCDB_B64`
 | Script | Description |
 |--------|-------------|
 | `test:e2e:cursor:local` | Run Cursor test locally |
-| `test:e2e:cursor:full` | Build Docker image and run test |
+| `test:e2e:cursor:docker` | Build Docker image and run test |
 | `test:e2e:cursor:build-image` | Build Cursor Docker image |
 | `test:e2e:cursor:run-docker` | Run test in Docker |
 | `test:e2e:cursor:run-docker-vnc` | Run with VNC enabled |
@@ -201,7 +201,7 @@ For CI: Add contents as GitHub secret `VSCODE_STATE_VSCDB_B64`
 | Script | Description |
 |--------|-------------|
 | `test:e2e:vscode:local` | Run VS Code test locally |
-| `test:e2e:vscode:full` | Build Docker image and run test |
+| `test:e2e:vscode:docker` | Build Docker image and run test |
 | `test:e2e:vscode:build-image` | Build VS Code Docker image |
 | `test:e2e:vscode:run-docker` | Run test in Docker |
 | `e2e:refresh-vscode-auth` | Export VS Code auth tokens |

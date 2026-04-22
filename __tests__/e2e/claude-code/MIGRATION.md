@@ -125,7 +125,7 @@ npm test -- --watch
 ### CI/Docker (Full E2E)
 ```bash
 # Docker-based test (unchanged)
-npm run test:e2e:claude-code:full
+npm run test:e2e:claude-code:docker
 ```
 
 The Docker test now uses vitest internally via `npx vitest run`.

@@ -41,7 +41,7 @@ Use this when:
 
 ```bash
 cd clients/tracer_ext
-npm run test:e2e:vscode:full
+npm run test:e2e:vscode:docker
 ```
 
 This runs both:
@@ -210,7 +210,7 @@ For CI/CD pipelines, use the full workflow:
 - name: Run VS Code E2E Tests
   run: |
     cd clients/tracer_ext
-    npm run test:e2e:vscode:full
+    npm run test:e2e:vscode:docker
 ```
 
 This ensures:

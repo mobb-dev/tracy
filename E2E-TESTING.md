@@ -35,7 +35,7 @@ cd clients/tracer_ext
 npm run test:e2e:cursor:local
 
 # Run in Docker (all platforms)
-npm run test:e2e:cursor:full
+npm run test:e2e:cursor:docker
 ```
 
 Default shortcut: `npm run test:e2e` runs Cursor tests
@@ -49,7 +49,7 @@ cd clients/tracer_ext
 npm run test:e2e:vscode:local
 
 # Run in Docker (all platforms)
-npm run test:e2e:vscode:full
+npm run test:e2e:vscode:docker
 ```
 
 ### Claude Code E2E Tests
@@ -61,7 +61,7 @@ cd clients/tracer_ext
 npm run test:e2e:claude-code:local
 
 # Run in Docker (all platforms)
-npm run test:e2e:claude-code:full
+npm run test:e2e:claude-code:docker
 ```
 
 ## Available Commands
@@ -70,8 +70,8 @@ npm run test:e2e:claude-code:full
 
 ```bash
 npm run test:e2e:cursor:local     # Build VSIX + run locally with Playwright
-npm run test:e2e:cursor:full      # Build VSIX + Docker image + run tests
-npm run test:e2e:cursor:full-vnc  # Same as full, with VNC enabled (port 25900)
+npm run test:e2e:cursor:docker      # Build VSIX + Docker image + run tests
+npm run test:e2e:cursor:docker-vnc  # Same as full, with VNC enabled (port 25900)
 npm run e2e:refresh-cursor-auth   # Export Cursor auth tokens
 ```
 
@@ -79,8 +79,8 @@ npm run e2e:refresh-cursor-auth   # Export Cursor auth tokens
 
 ```bash
 npm run test:e2e:vscode:local     # Build VSIX + run locally with Playwright
-npm run test:e2e:vscode:full      # Build VSIX + Docker image + run tests
-npm run test:e2e:vscode:full-vnc  # Same as full, with VNC enabled (port 15900)
+npm run test:e2e:vscode:docker      # Build VSIX + Docker image + run tests
+npm run test:e2e:vscode:docker-vnc  # Same as full, with VNC enabled (port 15900)
 npm run e2e:refresh-vscode-auth   # Export VS Code Copilot auth
 ```
 
@@ -88,7 +88,7 @@ npm run e2e:refresh-vscode-auth   # Export VS Code Copilot auth
 
 ```bash
 npm run test:e2e:claude-code:local  # Run locally with tsx
-npm run test:e2e:claude-code:full   # Build Docker image + run tests
+npm run test:e2e:claude-code:docker   # Build Docker image + run tests
 ```
 
 ## What Gets Tested
@@ -248,13 +248,13 @@ See running tests in real-time:
 
 **Cursor:**
 ```bash
-npm run test:e2e:cursor:full-vnc
+npm run test:e2e:cursor:docker-vnc
 # Connect VNC client to localhost:25900
 ```
 
 **VS Code:**
 ```bash
-npm run test:e2e:vscode:full-vnc
+npm run test:e2e:vscode:docker-vnc
 # Connect VNC client to localhost:15900
 ```
 
@@ -369,9 +369,9 @@ clients/tracer_ext/
 
 5. **Run in Docker** (recommended for CI):
    ```bash
-   npm run test:e2e:cursor:full
-   npm run test:e2e:vscode:full
-   npm run test:e2e:claude-code:full
+   npm run test:e2e:cursor:docker
+   npm run test:e2e:vscode:docker
+   npm run test:e2e:claude-code:docker
    ```
 
 ## Support

@@ -6,8 +6,8 @@ import { defineConfig } from '@playwright/test'
 export default defineConfig({
   testDir: '.', // Config is already in __tests__/e2e/
 
-  // Test timeout
-  timeout: 120000, // 2 minutes per test
+  // Test timeout - increased for Windows which is slower
+  timeout: process.platform === 'win32' ? 180000 : 120000,
 
   // Global setup/teardown timeout
   globalTimeout: 600000, // 10 minutes for all tests
@@ -43,17 +43,20 @@ export default defineConfig({
   // Test output directory
   outputDir: 'test-results',
 
-  // Separate projects for Cursor and VS Code tests
+  // Separate projects for Cursor and VS Code tests. The testMatch globs use
+  // `*automation*` so they pick up both the Linux (`playwright-automation.test.ts`)
+  // and Windows (`playwright-automation.windows.test.ts`) variants without needing
+  // a separate config file per platform.
   projects: [
     {
       name: 'cursor',
       testDir: './cursor', // Relative to config file location (__tests__/e2e/)
-      testMatch: '**/*automation.test.ts',
+      testMatch: ['**/*automation*.test.ts'],
     },
     {
       name: 'vscode',
       testDir: './vscode', // Relative to config file location (__tests__/e2e/)
-      testMatch: '**/*automation.test.ts',
+      testMatch: ['**/*automation*.test.ts'],
     },
   ],
 })

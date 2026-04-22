@@ -207,7 +207,7 @@ describe('Claude Code E2E with Hook Integration', () => {
       })
       fs.writeFileSync(
         path.join(testWorkspaceDir, '.claude', 'rules', 'test-rule.md'),
-        '# Test Rule\n\nUse TypeScript for all new files.\n'
+        '# Test Rule\n\nAlways add JSDoc comments to exported functions.\n'
       )
 
       // Initialize git repo (required for Claude Code)
@@ -442,7 +442,7 @@ describe('Claude Code E2E with Hook Integration', () => {
         .getS3Uploads()
         .get(testRuleRecord!.rawDataS3Key!)
       const expectedTestRule =
-        '# Test Rule\n\nUse TypeScript for all new files.\n'
+        '# Test Rule\n\nAlways add JSDoc comments to exported functions.\n'
       expect(s3ForTestRule).toBe(expectedTestRule)
       expect(s3ForTestRule).toHaveLength(expectedTestRule.length)
 

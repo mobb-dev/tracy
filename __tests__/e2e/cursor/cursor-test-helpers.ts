@@ -16,11 +16,13 @@ export function ensureWorkspaceGitRepo(workspaceDir: string): void {
     `📁 Workspace contents: ${fs.readdirSync(workspaceDir).join(', ')}`
   )
 
-  // execSync options - use /bin/bash shell explicitly for Docker compatibility
+  // execSync options - use appropriate shell for platform
+  // Linux/macOS: /bin/bash for Docker compatibility
+  // Windows: use default shell (cmd.exe)
   const execOptions: Parameters<typeof execSync>[1] = {
     cwd: workspaceDir,
     stdio: 'pipe',
-    shell: '/bin/bash',
+    ...(process.platform !== 'win32' && { shell: '/bin/bash' }),
   }
 
   if (!fs.existsSync(gitDir)) {

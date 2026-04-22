@@ -55,7 +55,7 @@ export async function initGitRepository(
   const execOptions: Parameters<typeof execSync>[1] = {
     cwd: workspaceDir,
     stdio: 'pipe',
-    shell: '/bin/bash',
+    shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/bash',
   }
 
   try {
