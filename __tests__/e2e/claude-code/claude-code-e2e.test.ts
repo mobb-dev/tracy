@@ -198,9 +198,22 @@ describe('Claude Code E2E with Hook Integration', () => {
       )
 
       // Create context files that the scanner should detect and upload
+      // ── Rules ──────────────────────────────────────────────────────────────
       fs.writeFileSync(
         path.join(testWorkspaceDir, 'CLAUDE.md'),
         '# Project Rules\n\nAlways write clean code.\n'
+      )
+      fs.writeFileSync(
+        path.join(testWorkspaceDir, 'CLAUDE.local.md'),
+        '# Local Rules\n\nLocal machine overrides.\n'
+      )
+      fs.writeFileSync(
+        path.join(testWorkspaceDir, 'AGENTS.md'),
+        '# Agent Rules\n\nRules for AI agents.\n'
+      )
+      fs.writeFileSync(
+        path.join(testWorkspaceDir, 'INSIGHTS.md'),
+        '# Insights\n\nProject insights and learnings.\n'
       )
       fs.mkdirSync(path.join(testWorkspaceDir, '.claude', 'rules'), {
         recursive: true,
@@ -208,6 +221,83 @@ describe('Claude Code E2E with Hook Integration', () => {
       fs.writeFileSync(
         path.join(testWorkspaceDir, '.claude', 'rules', 'test-rule.md'),
         '# Test Rule\n\nAlways add JSDoc comments to exported functions.\n'
+      )
+
+      // ── Commands (.claude/commands/*.md → category:skill, zipped) ──────────
+      fs.mkdirSync(path.join(testWorkspaceDir, '.claude', 'commands'), {
+        recursive: true,
+      })
+      fs.writeFileSync(
+        path.join(testWorkspaceDir, '.claude', 'commands', 'my-command.md'),
+        '---\ndescription: My custom command\n---\n\nRun this whenever needed.\n'
+      )
+
+      // ── Agent config (.claude/agents/*.md → category:agent-config) ─────────
+      fs.mkdirSync(path.join(testWorkspaceDir, '.claude', 'agents'), {
+        recursive: true,
+      })
+      fs.writeFileSync(
+        path.join(testWorkspaceDir, '.claude', 'agents', 'my-agent.md'),
+        '---\nname: My Agent\ndescription: A helpful coding agent\n---\n\nYou are a helpful coding agent.\n'
+      )
+
+      // ── Skill bundles (.claude/skills/ → category:skill, zipped) ───────────
+      // Folder skill: directory with SKILL.md + sibling files → all zipped together
+      fs.mkdirSync(
+        path.join(testWorkspaceDir, '.claude', 'skills', 'folder-skill'),
+        { recursive: true }
+      )
+      fs.writeFileSync(
+        path.join(
+          testWorkspaceDir,
+          '.claude',
+          'skills',
+          'folder-skill',
+          'SKILL.md'
+        ),
+        '---\nname: Folder Skill\ndescription: A skill that lives in a folder\n---\n\nProvides folder-based functionality.\n'
+      )
+      fs.writeFileSync(
+        path.join(
+          testWorkspaceDir,
+          '.claude',
+          'skills',
+          'folder-skill',
+          'helper.ts'
+        ),
+        '// Helper utilities\nexport function greet(name: string) {\n  return `Hello, ${name}!`\n}\n'
+      )
+      // Standalone skill: loose .md directly in skills/ → zipped as single file
+      fs.writeFileSync(
+        path.join(testWorkspaceDir, '.claude', 'skills', 'standalone-skill.md'),
+        '---\nname: Standalone Skill\ndescription: A self-contained skill file\n---\n\nThis skill lives in a single file.\n'
+      )
+
+      // ── Config (.claude/settings.json → category:config) ───────────────────
+      // Workspace-level settings (distinct from the hook settings written to ~/.claude/)
+      fs.writeFileSync(
+        path.join(testWorkspaceDir, '.claude', 'settings.json'),
+        JSON.stringify({}, null, 2)
+      )
+      fs.writeFileSync(
+        path.join(testWorkspaceDir, '.claude', 'settings.local.json'),
+        JSON.stringify({}, null, 2)
+      )
+
+      // ── MCP config (.mcp.json → category:mcp-config) ───────────────────────
+      fs.writeFileSync(
+        path.join(testWorkspaceDir, '.mcp.json'),
+        JSON.stringify({ mcpServers: {} }, null, 2)
+      )
+      fs.writeFileSync(
+        path.join(testWorkspaceDir, '.claude', '.mcp.json'),
+        JSON.stringify({ mcpServers: {} }, null, 2)
+      )
+
+      // ── Ignore (.claudeignore → category:ignore) ────────────────────────────
+      fs.writeFileSync(
+        path.join(testWorkspaceDir, '.claudeignore'),
+        'node_modules/\n*.log\nbuild/\n'
       )
 
       // Initialize git repo (required for Claude Code)
@@ -387,64 +477,181 @@ describe('Claude Code E2E with Hook Integration', () => {
       // ==== Step 9: Validate context file upload ====
       tracker.logTimestamp('Validating context file upload')
 
-      // Since T-476, each context file is uploaded individually to S3 with its
-      // own Tracy record (recordId = "ctx:{sessionId}:{md5}") and a `context`
-      // metadata field. Poll until both expected files appear.
-      const contextFileTimeout = UPLOAD_WAIT_TIMEOUT
-      const pollStart = Date.now()
-      let claudeMdRecord: (typeof allContextRecords)[0] | undefined
-      let testRuleRecord: (typeof allContextRecords)[0] | undefined
-      let allContextRecords: ReturnType<
-        typeof mockServer.getCapturedTracyRecords
-      > = []
-      while (Date.now() - pollStart < contextFileTimeout) {
-        allContextRecords = mockServer
+      // Each context file gets its own Tracy record:
+      //   recordId = "ctx:{sessionId}:{md5}", with a `context` metadata field.
+      // Skills and commands are zipped (rawDataS3Key ends in .zip);
+      // all other categories are plain text (ends in .bin).
+      type ExpectedCtx = {
+        label: string
+        match: (r: (typeof allCtxRecords)[0]) => boolean
+        category: string
+        /** Plain-text content to verify in S3 (omit for zip uploads) */
+        expectedContent?: string
+      }
+
+      const expectedCtxFiles: ExpectedCtx[] = [
+        // ── Rules ────────────────────────────────────────────────────────────
+        {
+          label: 'CLAUDE.md',
+          match: (r) => r.context?.name === 'CLAUDE.md',
+          category: 'rule',
+          expectedContent: '# Project Rules\n\nAlways write clean code.\n',
+        },
+        {
+          label: 'CLAUDE.local.md',
+          match: (r) => r.context?.name === 'CLAUDE.local.md',
+          category: 'rule',
+          expectedContent: '# Local Rules\n\nLocal machine overrides.\n',
+        },
+        {
+          label: 'AGENTS.md',
+          match: (r) => r.context?.name === 'AGENTS.md',
+          category: 'rule',
+          expectedContent: '# Agent Rules\n\nRules for AI agents.\n',
+        },
+        {
+          label: 'INSIGHTS.md',
+          match: (r) => r.context?.name === 'INSIGHTS.md',
+          category: 'rule',
+          expectedContent: '# Insights\n\nProject insights and learnings.\n',
+        },
+        {
+          label: '.claude/rules/test-rule.md',
+          match: (r) =>
+            r.context?.name === '.claude/rules/test-rule.md',
+          category: 'rule',
+          expectedContent:
+            '# Test Rule\n\nAlways add JSDoc comments to exported functions.\n',
+        },
+        // ── Commands (skill category, zipped) ────────────────────────────────
+        {
+          label: '.claude/commands/my-command.md',
+          match: (r) =>
+            r.context?.name === 'my-command' &&
+            r.context?.category === 'skill',
+          category: 'skill',
+        },
+        // ── Skill bundles (zipped) ────────────────────────────────────────────
+        {
+          label: '.claude/skills/folder-skill (folder bundle)',
+          match: (r) =>
+            r.context?.name === 'folder-skill' &&
+            r.context?.category === 'skill',
+          category: 'skill',
+        },
+        {
+          label: '.claude/skills/standalone-skill.md (standalone)',
+          match: (r) =>
+            r.context?.name === 'standalone-skill' &&
+            r.context?.category === 'skill',
+          category: 'skill',
+        },
+        // ── Agent (treated as skill, zipped) ─────────────────────────────────
+        {
+          label: '.claude/agents/my-agent.md',
+          match: (r) =>
+            r.context?.name === 'my-agent' && r.context?.category === 'skill',
+          category: 'skill',
+        },
+        // ── Config ────────────────────────────────────────────────────────────
+        {
+          label: '.claude/settings.json (workspace)',
+          match: (r) => r.context?.name === '.claude/settings.json',
+          category: 'config',
+        },
+        {
+          label: '.claude/settings.local.json',
+          match: (r) => r.context?.name === '.claude/settings.local.json',
+          category: 'config',
+        },
+        // ── MCP config ────────────────────────────────────────────────────────
+        {
+          label: '.mcp.json',
+          match: (r) => r.context?.name === '.mcp.json',
+          category: 'mcp-config',
+        },
+        {
+          label: '.claude/.mcp.json',
+          match: (r) => r.context?.name === '.claude/.mcp.json',
+          category: 'mcp-config',
+        },
+        // ── Ignore ────────────────────────────────────────────────────────────
+        {
+          label: '.claudeignore',
+          match: (r) => r.context?.name === '.claudeignore',
+          category: 'ignore',
+          expectedContent: 'node_modules/\n*.log\nbuild/\n',
+        },
+      ]
+
+      const ctxPollStart = Date.now()
+      const foundCtx = new Map<string, (typeof allCtxRecords)[0]>()
+      let allCtxRecords: ReturnType<typeof mockServer.getCapturedTracyRecords> =
+        []
+
+      while (Date.now() - ctxPollStart < UPLOAD_WAIT_TIMEOUT) {
+        allCtxRecords = mockServer
           .getCapturedTracyRecords()
           .filter((r) => r.recordId?.startsWith('ctx:') && r.context)
-        claudeMdRecord = allContextRecords.find(
-          (r) => r.context?.name === 'CLAUDE.md'
-        )
-        testRuleRecord = allContextRecords.find((r) =>
-          r.context?.filePath?.includes('.claude/rules/test-rule.md')
-        )
-        if (claudeMdRecord && testRuleRecord) {
-          break
+
+        for (const exp of expectedCtxFiles) {
+          if (!foundCtx.has(exp.label)) {
+            const record = allCtxRecords.find(exp.match)
+            if (record) foundCtx.set(exp.label, record)
+          }
         }
+
+        if (foundCtx.size === expectedCtxFiles.length) break
         await new Promise((r) => setTimeout(r, 1000))
       }
 
-      console.log(`  Context file records: ${allContextRecords.length} files`)
-      for (const r of allContextRecords) {
-        console.log(`    - ${r.context?.name} (${r.context?.category})`)
+      console.log(`  Context file records: ${allCtxRecords.length} total`)
+      for (const r of allCtxRecords) {
+        console.log(
+          `    - ${r.context?.name} (${r.context?.category}) → ${r.rawDataS3Key?.split('/').pop()}`
+        )
       }
 
-      // Verify workspace CLAUDE.md was captured
-      expect(
-        claudeMdRecord,
-        'CLAUDE.md should be in context records'
-      ).toBeTruthy()
-      expect(claudeMdRecord!.context?.category).toBe('rule')
-      expect(claudeMdRecord!.platform).toBe('CLAUDE_CODE')
-      const s3ForClaude = mockServer
-        .getS3Uploads()
-        .get(claudeMdRecord!.rawDataS3Key!)
-      const expectedClaudeMd = '# Project Rules\n\nAlways write clean code.\n'
-      expect(s3ForClaude).toBe(expectedClaudeMd)
-      expect(s3ForClaude).toHaveLength(expectedClaudeMd.length)
+      for (const exp of expectedCtxFiles) {
+        const record = foundCtx.get(exp.label)
+        expect(record, `"${exp.label}" should appear in context records`).toBeTruthy()
+        if (!record) continue
 
-      // Verify .claude/rules/test-rule.md was captured
-      expect(
-        testRuleRecord,
-        '.claude/rules/test-rule.md should be in context records'
-      ).toBeTruthy()
-      expect(testRuleRecord!.context?.category).toBe('rule')
-      const s3ForTestRule = mockServer
-        .getS3Uploads()
-        .get(testRuleRecord!.rawDataS3Key!)
-      const expectedTestRule =
-        '# Test Rule\n\nAlways add JSDoc comments to exported functions.\n'
-      expect(s3ForTestRule).toBe(expectedTestRule)
-      expect(s3ForTestRule).toHaveLength(expectedTestRule.length)
+        expect(record.platform, `${exp.label}: platform`).toBe('CLAUDE_CODE')
+        expect(
+          record.recordId?.startsWith('ctx:'),
+          `${exp.label}: recordId prefix`
+        ).toBe(true)
+        expect(record.context?.category, `${exp.label}: category`).toBe(
+          exp.category
+        )
+
+        const s3Key = record.rawDataS3Key!
+        expect(s3Key, `${exp.label}: rawDataS3Key`).toBeTruthy()
+
+        if (exp.category === 'skill') {
+          // Skills and commands are zipped — key ends in .zip
+          expect(s3Key, `${exp.label}: S3 key should end in .zip`).toMatch(
+            /\.zip$/
+          )
+          const zipContent = s3Uploads.get(s3Key)
+          expect(
+            zipContent,
+            `${exp.label}: zip should be uploaded to S3`
+          ).toBeTruthy()
+        } else {
+          // All other categories are plain-text — key ends in .bin
+          expect(s3Key, `${exp.label}: S3 key should end in .bin`).toMatch(
+            /\.bin$/
+          )
+          if (exp.expectedContent !== undefined) {
+            const s3Content = s3Uploads.get(s3Key)
+            expect(s3Content, `${exp.label}: S3 content`).toBe(
+              exp.expectedContent
+            )
+          }
+        }
+      }
 
       console.log('  ✅ Context files uploaded and validated')
       tracker.mark('Context Files Uploaded')
