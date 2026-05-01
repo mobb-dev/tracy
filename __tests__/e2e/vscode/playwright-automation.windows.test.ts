@@ -422,6 +422,13 @@ test.describe('VS Code Extension E2E (Windows)', () => {
       await new Promise((resolve) => setTimeout(resolve, 2000))
     }
 
+    // Capture VS Code's exthost log + the Mobb extension's pino log BEFORE
+    // the profile dir is removed below — otherwise an early failure (e.g.
+    // activation timeout) leaves no diagnostic trace in the artifact.
+    if (testProfileDir && fs.existsSync(testProfileDir)) {
+      captureExtensionLogs(testProfileDir)
+    }
+
     if (testProfileDir && fs.existsSync(testProfileDir)) {
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
@@ -559,16 +566,36 @@ test.describe('VS Code Extension E2E (Windows)', () => {
     // Wait for extension activation
     console.log('  Waiting for extension activation...')
     const activationStart = Date.now()
+    let lastLoggedCount = 0
     while (
       mockServer.getRequestLog().length === 0 &&
       Date.now() - activationStart < 30000
     ) {
       await mainWindow.waitForTimeout(500)
+      const elapsed = Date.now() - activationStart
+      const current = mockServer.getRequestLog()
+      // Log on every 5s tick OR when a new request lands. Helps distinguish
+      // "extension never started" from "started but slow" in CI — a bare
+      // count can't show whether 'verifyApiConnection' or 'Me' actually fired.
+      if (current.length !== lastLoggedCount || elapsed % 5000 < 500) {
+        const ops = current
+          .map((r) => r.body?.operationName)
+          .filter(Boolean)
+          .join(', ')
+        console.log(
+          `  ... ${Math.floor(elapsed / 1000)}s elapsed, requests: ${current.length}${ops ? ` [${ops}]` : ''}`
+        )
+        lastLoggedCount = current.length
+      }
     }
 
     const requests = mockServer.getRequestLog()
+    const finalOps = requests
+      .map((r) => r.body?.operationName)
+      .filter(Boolean)
+      .join(', ')
     console.log(
-      `  Extension activation: ${requests.length} requests after ${Date.now() - activationStart}ms`
+      `  Extension activation: ${requests.length} requests after ${Date.now() - activationStart}ms${finalOps ? ` [${finalOps}]` : ''}`
     )
     expect(
       requests.length,

@@ -116,6 +116,21 @@ function getCursorKey(filePath: string): string {
   return `copilot.session.${hash}`
 }
 
+/**
+ * Read the stored byte offset for a file path from configstore.
+ * Returns 0 when no cursor has been persisted yet (first-seen file).
+ *
+ * Kept on the main thread because configstore uses synchronous atomic file
+ * writes and isn't worker-safe; callers pass the resulting offsets to the
+ * read worker over postMessage.
+ */
+export function getStoredByteOffset(filePath: string): number {
+  const stored = configStore.get(getCursorKey(filePath)) as
+    | CursorValue
+    | undefined
+  return stored?.byteOffset ?? 0
+}
+
 // ---------------------------------------------------------------------------
 // Workspace storage discovery
 // ---------------------------------------------------------------------------
@@ -228,66 +243,6 @@ export async function readSessionId(filePath: string): Promise<string | null> {
 }
 
 /**
- * Read new bytes from a JSONL file starting at the stored byte offset.
- * Reads the entire remaining file — Copilot JSONL files are typically <5MB.
- * Fully async to avoid blocking the VS Code UI thread.
- */
-export async function readNewLines(filePath: string): Promise<{
-  lines: string[]
-  newByteOffset: number
-  newFileSize: number
-}> {
-  const stored = configStore.get(getCursorKey(filePath)) as
-    | CursorValue
-    | undefined
-  const byteOffset = stored?.byteOffset ?? 0
-
-  const stat = await fs.stat(filePath)
-  const currentSize = stat.size
-
-  // Handle truncation: if offset is past EOF, reset to 0
-  const effectiveOffset = byteOffset > currentSize ? 0 : byteOffset
-
-  if (effectiveOffset >= currentSize) {
-    return {
-      lines: [],
-      newByteOffset: effectiveOffset,
-      newFileSize: currentSize,
-    }
-  }
-
-  const MAX_READ_BYTES = 20 * 1024 * 1024 // 20 MB
-  const bytesToRead = currentSize - effectiveOffset
-  if (bytesToRead > MAX_READ_BYTES) {
-    logger.warn(
-      { filePath, bytesToRead, maxBytes: MAX_READ_BYTES },
-      'JSONL file delta exceeds max read size — reading partial data'
-    )
-  }
-  const cappedBytes = Math.min(bytesToRead, MAX_READ_BYTES)
-
-  const fh = await fs.open(filePath, 'r')
-  try {
-    const buffer = Buffer.alloc(cappedBytes)
-    await fh.read(buffer, 0, cappedBytes, effectiveOffset)
-    const text = buffer.toString('utf-8')
-    // If capped, drop the last partial line (may be truncated mid-JSON)
-    const allLines = text.split('\n')
-    const lines =
-      cappedBytes < bytesToRead && !text.endsWith('\n')
-        ? allLines.slice(0, -1).filter((l) => l.trim().length > 0)
-        : allLines.filter((l) => l.trim().length > 0)
-    const newByteOffset =
-      cappedBytes < bytesToRead
-        ? effectiveOffset + Buffer.byteLength(`${lines.join('\n')}\n`, 'utf-8')
-        : currentSize
-    return { lines, newByteOffset, newFileSize: currentSize }
-  } finally {
-    await fh.close()
-  }
-}
-
-/**
  * Process JSONL lines into in-memory state and return completed requests.
  * Pure in-memory — no file I/O.
  */
@@ -346,19 +301,43 @@ function getCompletionStatus(
 }
 
 /**
+ * Number of JSONL lines between yield points in `processLines`. Every N
+ * lines the function `await`s a `setImmediate` so the extension host event
+ * loop can run a tick — prevents a long sync block on first-run catch-up
+ * when a single session file has thousands of lines (e.g. an agent session
+ * with hundreds of tool invocations, each emitting kind:1+kind:2 patches).
+ *
+ * 1000 is a pragmatic batch size: large enough that per-yield overhead is
+ * negligible, small enough that the main thread isn't monopolized for more
+ * than ~50-100ms between yields.
+ */
+const YIELD_EVERY_LINES = 1000
+
+/**
  * Process JSONL lines into in-memory state and return completed requests.
  *
  * Uses two complementary indexes to avoid the kind:1/kind:2 index mismatch:
  * - kind:2 data keyed by requestId (response[], message, modelId)
  * - kind:1 patches keyed by original index (result, modelState)
  * - Appearance order links them: Nth unique requestId = original index N
+ *
+ * Async + periodic yields so a very large `lines` array can't freeze the
+ * extension host event loop (see YIELD_EVERY_LINES).
  */
-export function processLines(
+export async function processLines(
   lines: string[],
   state: SessionFileState,
   maxRecords?: number
-): { records: CopilotRawRecord[]; emittedIds: string[] } {
-  for (const line of lines) {
+): Promise<{ records: CopilotRawRecord[]; emittedIds: string[] }> {
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const line = lines[lineIdx]
+    // Yield to the event loop every N lines so UI input/render can run.
+    // Placed at the top of the loop so it also fires on the very first
+    // iteration after a loop entry in tight re-runs — safe because the
+    // state being built is additive.
+    if (lineIdx > 0 && lineIdx % YIELD_EVERY_LINES === 0) {
+      await new Promise((resolve) => setImmediate(resolve))
+    }
     let obj: { kind?: number; k?: (string | number)[]; v?: unknown }
     try {
       obj = JSON.parse(line) as typeof obj

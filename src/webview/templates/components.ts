@@ -234,6 +234,51 @@ export const conversationSummarySection = (
               </ul>
             </div>
           </section>
+
+          ${s.appliedSkills?.length > 0 || s.mcpCalls?.length > 0
+            ? html`<section class="collapsible-section">
+                <button
+                  type="button"
+                  class="collapsible-header"
+                  data-collapsible
+                  aria-expanded="false"
+                >
+                  <span class="arrow">▼</span>
+                  <h4 class="collapsible-title">Tools & Skills Used</h4>
+                </button>
+                <div
+                  class="collapsible-content is-collapsed"
+                  data-collapsible-content
+                >
+                  ${s.appliedSkills?.length > 0
+                    ? html`<p class="summary-label"><strong>Skills:</strong></p>
+                        <ul class="summary-list">
+                          ${[...new Set(s.appliedSkills)]
+                            .map((skill) => html`<li>${escapeHtml(skill)}</li>`)
+                            .join('')}
+                        </ul>`
+                    : ''}
+                  ${s.mcpCalls?.length > 0
+                    ? html`<p class="summary-label">
+                          <strong>MCP Tools:</strong>
+                        </p>
+                        <ul class="summary-list">
+                          ${s.mcpCalls
+                            .map(
+                              (c) =>
+                                html`<li>
+                                  ${escapeHtml(c.mcpServer)}/${escapeHtml(
+                                    c.mcpTool
+                                  )}
+                                  (×${c.callCount})
+                                </li>`
+                            )
+                            .join('')}
+                        </ul>`
+                    : ''}
+                </div>
+              </section>`
+            : ''}
         </div>
         <hr />`
     }
@@ -243,24 +288,62 @@ export const conversationSummarySection = (
   return ''
 }
 
+function normalizeCodeChangeHeader(header: string): string {
+  // Normalize legacy "Tool result: /path" → "Edited: /path"
+  if (header.startsWith('Tool result: ')) {
+    return `Edited: ${header.slice('Tool result: '.length)}`
+  }
+  return header
+}
+
+function renderCodeChange(text: string): string {
+  const newlineIdx = text.indexOf('\n')
+  if (newlineIdx === -1) {
+    const header = normalizeCodeChangeHeader(text)
+    return html`<div class="code-change-header">${escapeHtml(header)}</div>`
+  }
+  const header = normalizeCodeChangeHeader(text.slice(0, newlineIdx))
+  const diff = text.slice(newlineIdx + 1)
+  const diffHtml = diff
+    .split('\n')
+    .map((line) => {
+      const cls = line.startsWith('+')
+        ? 'diff-add'
+        : line.startsWith('-')
+          ? 'diff-del'
+          : 'diff-ctx'
+      return `<span class="${cls}">${escapeHtml(line)}</span>`
+    })
+    .join('\n')
+  return html`<div class="code-change-header">${escapeHtml(header)}</div>
+    <pre class="code-change-diff">${diffHtml}</pre>`
+}
+
 export const conversationMessage = (message: {
   type: string
   text: string
   date: string
 }): string => {
   const isUser = message.type === 'USER_PROMPT'
-  const messageClass = isUser ? 'user-message' : 'ai-message'
-  const avatar = ''
+  const isCodeChange = message.type === 'CODE_GENERATION'
+  const messageClass = isUser
+    ? 'user-message'
+    : isCodeChange
+      ? 'code-change-message'
+      : 'ai-message'
   const timestamp = timeAgo(message.date)
-  const escapedText = escapeHtml(message.text).replace(/\n/g, '<br>')
+
+  const body = isCodeChange
+    ? renderCodeChange(message.text)
+    : escapeHtml(message.text).replace(/\n/g, '<br>')
 
   return html`
     <div class="${messageClass}">
       <div class="message-header">
-        <span class="avatar">${avatar}</span>
+        <span class="avatar"></span>
         ${timestamp ? html`<span class="timestamp">${timestamp}</span>` : ''}
       </div>
-      <div class="message-content">${escapedText}</div>
+      <div class="message-content">${body}</div>
     </div>
   `
 }

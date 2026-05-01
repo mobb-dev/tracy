@@ -24,6 +24,7 @@ export type CircuitBreakerOptions = {
 export class CircuitBreaker {
   private consecutiveFailures = 0
   private interval: number
+  private _transientErrors = 0
 
   constructor(private readonly opts: CircuitBreakerOptions) {
     this.interval = opts.baseIntervalMs
@@ -32,6 +33,16 @@ export class CircuitBreaker {
   /** Current polling interval (includes backoff). */
   get currentInterval(): number {
     return this.interval
+  }
+
+  /** Number of consecutive failures (0 when healthy). */
+  get failures(): number {
+    return this.consecutiveFailures
+  }
+
+  /** Number of transient errors since last reset (e.g., DB locked, file busy). */
+  get transientErrors(): number {
+    return this._transientErrors
   }
 
   /** Compute delay with ±20% jitter to prevent thundering herd. */
@@ -58,9 +69,10 @@ export class CircuitBreaker {
     this.consecutiveFailures = this.opts.threshold - 1
   }
 
-  /** Record a successful cycle — reset backoff. */
+  /** Record a successful cycle — reset backoff and transient error counter. */
   recordSuccess(): void {
     this.consecutiveFailures = 0
+    this._transientErrors = 0
     this.interval = this.opts.baseIntervalMs
   }
 
@@ -68,6 +80,7 @@ export class CircuitBreaker {
   recordFailure(err: Error): { isTransient: boolean } {
     const errMsg = err.message ?? String(err)
     if (this.opts.isTransientError(err)) {
+      this._transientErrors++
       logger.warn({ err }, `${this.opts.name} transient error, skipping cycle`)
       return { isTransient: true }
     }

@@ -52,6 +52,8 @@ export type PromptSummary = {
   developersPushbacks: string[]
   importantInstructionsAndDecisions: string[]
   backAndForthLevel: BackAndForthLevel
+  appliedSkills: string[]
+  mcpCalls: Array<{ mcpServer: string; mcpTool: string; callCount: number }>
 }
 
 export type AIBlameAttributionList = AIBlameAttribution[]
@@ -659,7 +661,11 @@ export async function GetAiBlamePromptSummary(
 
     if (response.__typename === 'PromptSummarySuccess') {
       if (response.status == Status.Ok) {
-        return response.summary
+        return {
+          ...response.summary,
+          appliedSkills: response.summary.appliedSkills ?? [],
+          mcpCalls: response.summary.mcpCalls ?? [],
+        }
       }
     }
   } catch (err) {

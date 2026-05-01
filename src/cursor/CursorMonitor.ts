@@ -5,12 +5,19 @@ import * as vscode from 'vscode'
 import { CircuitBreaker } from '../shared/CircuitBreaker'
 import { BaseMonitor } from '../shared/IMonitor'
 import { logger } from '../shared/logger'
+import { buildCycleHeartbeat } from '../shared/machineContext'
 import { AppType } from '../shared/repositoryInfo'
 import {
   uploadContextFilesForSession,
   uploadCursorRawRecords,
 } from '../shared/uploader'
-import { getRecentBubbleKeys, prefetchSessions } from './db'
+import {
+  consumeWorkerPerf,
+  getRecentBubbleKeys,
+  isWorkerAvailable,
+  prefetchSessions,
+  recycleWorker,
+} from './db'
 import {
   cleanupStaleCursors,
   type CursorRawRecord,
@@ -102,22 +109,39 @@ export class CursorMonitor extends BaseMonitor {
 
   private async poll(): Promise<void> {
     while (this._isRunning && !this.abortController?.signal.aborted) {
-      try {
-        const { signal } = this.abortController!
+      const { signal } = this.abortController!
 
+      try {
         await setTimeout(this.breaker.getDelayWithJitter(), undefined, {
           signal,
         })
-
-        if (!this._isRunning || signal.aborted) {
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') {
           break
         }
+        logger.error({ err }, `${this.name} sleep failed unexpectedly`)
+        break
+      }
 
+      if (!this._isRunning || signal.aborted) {
+        break
+      }
+
+      // Hoisted so the catch branch can emit a heartbeat for failed cycles
+      // too — otherwise we lose heap/CPU/breaker visibility for the entire
+      // duration of an outage, which is exactly when we need it most.
+      const cpuBefore = process.cpuUsage()
+      const heapBefore = process.memoryUsage().heapUsed
+      const cycleStart = Date.now()
+
+      try {
         await this.breaker.waitIfOpen(signal)
 
         // 1. Discover active sessions (recent keys + persisted cursors)
+        const discoveryStart = Date.now()
         const recentKeys = await getRecentBubbleKeys(RECENT_DISCOVERY_LIMIT)
         const sessionIds = discoverActiveSessions(recentKeys)
+        const discoveryDurationMs = Date.now() - discoveryStart
 
         // Group discovered keys by composerId so the worker can use a
         // fast `WHERE key IN (...)` lookup instead of a `LIKE` scan
@@ -132,7 +156,8 @@ export class CursorMonitor extends BaseMonitor {
             : MAX_RECORDS_PER_CYCLE
 
         // 2. Prefetch: batch-fetch all sessions in a single worker call
-        //    (single DB connection open/close = single lock acquisition)
+        //    (connection stays open for worker lifetime, recycled between cycles)
+        const prefetchStart = Date.now()
         const prefetchedSessions = await prefetchSessions(
           sessionIds.map((composerId) => ({
             composerId,
@@ -142,6 +167,7 @@ export class CursorMonitor extends BaseMonitor {
           })),
           bubblesPerSession
         )
+        const dbPrefetchDurationMs = Date.now() - prefetchStart
 
         // 3. Process: prepare records in-memory (zero DB access)
         const allRecords: CursorRawRecord[] = []
@@ -191,17 +217,20 @@ export class CursorMonitor extends BaseMonitor {
         }
 
         // 4. Upload all records in a single batch
+        let uploadDurationMs: number | undefined
         if (allRecords.length > 0) {
           logger.info(
             { heartbeat: true },
             `Uploading ${allRecords.length} record(s) from ${sessionIds.length} session(s)`
           )
+          const uploadStart = Date.now()
           await uploadCursorRawRecords(
             allRecords,
             allIncomplete,
             maxRowIds,
             bubblesPerSession
           )
+          uploadDurationMs = Date.now() - uploadStart
         }
 
         // 4b. Upload new/changed context files for each active session (fire-and-forget).
@@ -227,12 +256,73 @@ export class CursorMonitor extends BaseMonitor {
         }
 
         this.breaker.recordSuccess()
+
+        // Emit cycle performance metrics
+        const workerPerf = consumeWorkerPerf()
+        logger.info(
+          {
+            heartbeat: true,
+            data: buildCycleHeartbeat({
+              cpuBefore,
+              heapBefore,
+              cycleStart,
+              breaker: this.breaker,
+              extra: {
+                discoveryDurationMs,
+                dbPrefetchDurationMs,
+                sessionsDiscovered: sessionIds.length,
+                bubblesPerSession,
+                recordsProduced: allRecords.length,
+                pendingSessions: prefetchedSessions.filter(
+                  (s) => s.bubbles.length >= bubblesPerSession
+                ).length,
+                incompleteBubbles: [...allIncomplete.values()].reduce(
+                  (s, a) => s + a.length,
+                  0
+                ),
+                ...(uploadDurationMs != null && { uploadDurationMs }),
+                ...(workerPerf && {
+                  workerPrefetchQueryMs: workerPerf.queryDurationMs,
+                  workerPrefetchHeapBytes: workerPerf.heapUsedBytes,
+                  workerPrefetchRssBytes: workerPerf.rssBytes,
+                  workerPrefetchRows: workerPerf.rowsReturned,
+                }),
+                workerAvailable: isWorkerAvailable(),
+              },
+            }),
+          },
+          'cursor poll cycle'
+        )
+
+        // Recycle worker to reset its V8 heap — works around a memory leak
+        // in node:sqlite where native memory accumulates across cycles.
+        try {
+          await recycleWorker()
+        } catch (recycleErr) {
+          logger.warn({ err: recycleErr }, 'Worker recycle failed')
+        }
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {
           break
         }
-        this.breaker.recordFailure(
-          err instanceof Error ? err : new Error(String(err))
+        const failure = err instanceof Error ? err : new Error(String(err))
+        this.breaker.recordFailure(failure)
+
+        logger.info(
+          {
+            heartbeat: true,
+            data: buildCycleHeartbeat({
+              cpuBefore,
+              heapBefore,
+              cycleStart,
+              breaker: this.breaker,
+              extra: {
+                cycleOutcome: 'failure',
+                errorMessage: failure.message,
+              },
+            }),
+          },
+          'cursor poll cycle'
         )
       }
     }

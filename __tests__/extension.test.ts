@@ -96,6 +96,8 @@ vi.mock('../src/human/HumanMonitor', () => ({
 vi.mock('../src/shared/logger', () => {
   return {
     initLogger: vi.fn(),
+    flushLogger: vi.fn(),
+    updateLoggerPlatformTags: vi.fn(),
     logger: {
       info: vi.fn(),
       error: vi.fn(),
@@ -200,6 +202,8 @@ vi.mock('../src/cursor/db', () => ({
   prefetchSessions: (
     sessions: { composerId: string; afterTimestamp?: string }[]
   ) => prefetchSessionsMock(sessions),
+  consumeWorkerPerf: vi.fn(() => null),
+  recycleWorker: vi.fn(async () => undefined),
 }))
 
 // Mock repositoryInfo to return valid test data
@@ -283,6 +287,9 @@ vi.mock('../src/ui/TracyController', () => ({
 vi.mock('../src/ui/TracyStatusBar', () => ({
   StatusBarView: vi.fn().mockImplementation(() => ({
     dispose: vi.fn(),
+    error: vi.fn(),
+    setAuthPending: vi.fn(),
+    clearAuthPending: vi.fn(),
   })),
 }))
 

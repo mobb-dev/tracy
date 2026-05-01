@@ -127,8 +127,14 @@ export class MockUploadServer {
       const query = req.body.query || ''
       const variables = req.body.variables || {}
 
-      // Log every GraphQL request with full details
-      log(`  [Mock] GraphQL request: ${operationName}`)
+      // Log every GraphQL request with full details. Write to stderr (not via
+      // debug() and not via console.log) so the operation name reaches the CI
+      // job log without requiring a DEBUG= env var, and without going through
+      // vitest's stdout interception — high-volume console.log on the windows
+      // runner has been linked to vitest "Timeout calling onTaskUpdate" IPC
+      // errors during teardown. This is the primary signal we need to
+      // diagnose activation/handshake failures.
+      process.stderr.write(`  [Mock] GraphQL request: ${operationName}\n`)
 
       // For unknown operations, log full request body for debugging
       const knownOperations = [

@@ -638,21 +638,51 @@ test.describe('VS Code Extension E2E (Copilot)', () => {
       const activationStartTime = Date.now()
       const activationTimeout = 30000
       console.log('  Waiting for extension activation (up to 30s)...')
+      let lastLoggedCount = 0
+      // Wait for the FULL set of operations the assertions below check —
+      // not just for "any request" — so the loop doesn't bail between
+      // verifyApiConnection's `Me` and validateUserToken's `CreateCommunityUser`
+      // and miss the second one. The poll-too-early race was the cause of
+      // the "did not perform login/org resolution" flake on Linux CI.
+      const hasFullActivation = (): boolean => {
+        const ops = mockServer
+          .getRequestLog()
+          .map((r) => r.body?.operationName)
+        return (
+          ops.includes('Me') &&
+          (ops.includes('CreateCommunityUser') || ops.includes('getLastOrg'))
+        )
+      }
       while (
-        mockServer.getRequestLog().length === 0 &&
+        !hasFullActivation() &&
         Date.now() - activationStartTime < activationTimeout
       ) {
         await mainWindow.waitForTimeout(1000)
         const elapsed = Math.floor((Date.now() - activationStartTime) / 1000)
-        if (elapsed % 5 === 0) {
+        const current = mockServer.getRequestLog()
+        // Log on every 5s tick OR when a new request lands. The op-name list
+        // is what we actually need to triage activation/handshake races —
+        // a bare count can't distinguish 'verifyApiConnection' from 'Me'.
+        if (current.length !== lastLoggedCount || elapsed % 5 === 0) {
+          const ops = current
+            .map((r) => r.body?.operationName)
+            .filter(Boolean)
+            .join(', ')
           console.log(
-            `  ... ${elapsed}s elapsed, requests: ${mockServer.getRequestLog().length}`
+            `  ... ${elapsed}s elapsed, requests: ${current.length}${ops ? ` [${ops}]` : ''}`
           )
+          lastLoggedCount = current.length
         }
       }
 
       const requests = mockServer.getRequestLog()
-      console.log(`  Mock server requests: ${requests.length}`)
+      const finalOps = requests
+        .map((r) => r.body?.operationName)
+        .filter(Boolean)
+        .join(', ')
+      console.log(
+        `  Mock server requests: ${requests.length}${finalOps ? ` [${finalOps}]` : ''}`
+      )
 
       expect(
         requests.length,

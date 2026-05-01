@@ -22,14 +22,27 @@ export type { DBRow } from './types'
 
 const WORKER_REQUEST_TIMEOUT_MS = 10_000
 
+export type WorkerPerfData = {
+  queryDurationMs: number
+  heapUsedBytes: number
+  rssBytes: number
+  rowsReturned: number
+}
+
 /** Worker instance */
 let worker: Worker | null = null
+
+/** Perf data from the most recent worker response */
+let lastWorkerPerf: WorkerPerfData | null = null
 
 /** Stored dbPath for auto-restart after unexpected worker exit */
 let storedDbPath: string | null = null
 
 /** Whether closeDB() was called intentionally */
 let isClosing = false
+
+/** Whether recycleWorker() is in progress (intentional termination) */
+let isRecycling = false
 
 /** Crash-loop protection: track restarts within a rolling window */
 const MAX_RESTARTS = 3
@@ -77,6 +90,7 @@ function spawnWorker(dbPath: string): void {
       id: number
       result?: unknown
       error?: string
+      perf?: WorkerPerfData
       type?: string
       level?: 'debug' | 'info' | 'warn' | 'error'
       msg?: string
@@ -117,6 +131,8 @@ function spawnWorker(dbPath: string): void {
       if (msg.error) {
         pending.reject(new Error(msg.error))
       } else {
+        // Store latest perf data for the caller to read
+        lastWorkerPerf = msg.perf ?? null
         pending.resolve(msg.result)
       }
     }
@@ -144,7 +160,7 @@ function spawnWorker(dbPath: string): void {
       }
     }
 
-    if (code !== 0 && !isClosing && isCurrentWorker) {
+    if (code !== 0 && !isClosing && !isRecycling && isCurrentWorker) {
       logger.warn(
         `[db.ts] Worker exited with code ${code}, will restart on next request`
       )
@@ -432,4 +448,56 @@ export async function prefetchSessions(
     sessions,
     bubblesLimit,
   })
+}
+
+/**
+ * Returns perf data from the most recent worker response.
+ * Consumed once — returns null on subsequent calls until a new response arrives.
+ */
+export function consumeWorkerPerf(): WorkerPerfData | null {
+  const perf = lastWorkerPerf
+  lastWorkerPerf = null
+  return perf
+}
+
+/**
+ * Returns whether the worker is currently running.
+ */
+export function isWorkerAvailable(): boolean {
+  return worker !== null
+}
+
+/**
+ * Terminate the current worker so the next request spawns a fresh one.
+ * This resets the worker's V8 heap, working around a memory leak in
+ * node:sqlite where native memory accumulates across open/close cycles.
+ * Safe to call between poll cycles — the next getRecentBubbleKeys or
+ * prefetchSessions call will spawn a new worker via ensureWorker().
+ */
+export async function recycleWorker(): Promise<void> {
+  if (!worker) {
+    return
+  }
+  isRecycling = true
+  try {
+    // Ask the worker to close its DB connection cleanly before terminating
+    try {
+      await workerRequest('close')
+    } catch {
+      // Ignore — we're terminating anyway
+    }
+    try {
+      await worker.terminate()
+    } catch {
+      // Ignore termination errors
+    }
+    worker = null
+    lastWorkerPerf = null
+    // Clear crash-loop timestamps — this is an intentional recycle, not a crash.
+    // Without this, ensureWorker() counts each recycle as a restart and
+    // permanently suppresses the worker after ~80s (3 restarts in 60s).
+    restartTimestamps.length = 0
+  } finally {
+    isRecycling = false
+  }
 }

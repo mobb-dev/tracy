@@ -12,6 +12,7 @@ import { CircuitBreaker } from '../shared/CircuitBreaker'
 import { getConfig } from '../shared/config'
 import { BaseMonitor } from '../shared/IMonitor'
 import { logger } from '../shared/logger'
+import { buildCycleHeartbeat, machineContext } from '../shared/machineContext'
 import { AppType, getNormalizedRepoUrl } from '../shared/repositoryInfo'
 import {
   uploadContextFilesForSession,
@@ -26,11 +27,17 @@ import {
   type CopilotRawRecord,
   createEmptyState,
   discoverActiveSessionFiles,
+  getStoredByteOffset,
   processLines,
-  readNewLines,
   readSessionId,
   type SessionFileState,
 } from './rawProcessor'
+import {
+  closeReadWorker,
+  consumeReadWorkerPerf,
+  initReadWorker,
+  readNewLinesBatch,
+} from './readClient'
 
 const DEFAULT_POLLING_INTERVAL = 20_000
 const BASE_POLLING_INTERVAL = process.env.MOBB_TRACER_POLL_INTERVAL_MS
@@ -38,7 +45,32 @@ const BASE_POLLING_INTERVAL = process.env.MOBB_TRACER_POLL_INTERVAL_MS
   : DEFAULT_POLLING_INTERVAL
 const MAX_POLLING_INTERVAL = BASE_POLLING_INTERVAL * 6
 const MAX_RECORDS_PER_CYCLE = 200
+/**
+ * Cap files read per cycle to bound blocking on the extension host thread.
+ * Without this, a first-run catch-up (no persisted cursors) can discover
+ * dozens of historical JSONL files and read them all in parallel — a single
+ * 17s blocking cycle + ~180MB heap spike was observed in the B3 stress test.
+ *
+ * Files are sorted mtime-DESC in `discoverActiveSessionFiles`, so the freshest
+ * activity always gets processed first. Remaining files get picked up on
+ * subsequent cycles (20s later), spreading the catch-up over several minutes
+ * instead of hanging the IDE in one burst.
+ */
+const MAX_SESSION_FILES_PER_CYCLE = 10
 const SESSION_STATE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000 // 1 week
+
+/**
+ * Yield control to the extension host event loop for one tick.
+ *
+ * `setImmediate` runs after all currently-queued I/O callbacks, giving the
+ * event loop a chance to render a frame or handle user input before we
+ * charge into the next file's sync processing. Cost is on the order of
+ * tens of microseconds — negligible compared to even the fastest
+ * `processLines` call.
+ */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve))
+}
 
 export class CopilotMonitor extends BaseMonitor {
   readonly name = 'CopilotMonitor'
@@ -114,6 +146,11 @@ export class CopilotMonitor extends BaseMonitor {
     // Clean up stale cursor keys from configStore on startup
     cleanupStaleCursors()
 
+    // Spin up the dedicated JSONL-read worker before the poll loop starts.
+    // Keeps multi-MB file reads + UTF-8 decoding off the extension host
+    // thread; falls back gracefully if the worker fails to spawn.
+    await initReadWorker()
+
     logger.info(
       `CopilotMonitor: workspace storage = ${this.workspaceStoragePath ?? 'ALL (no storageUri)'}`
     )
@@ -165,6 +202,14 @@ export class CopilotMonitor extends BaseMonitor {
       this.pollingPromise = null
     }
 
+    // Tear down the read worker after the poll loop has exited so no
+    // in-flight request ends up talking to a terminated thread.
+    try {
+      await closeReadWorker()
+    } catch (err) {
+      logger.warn({ err }, 'Error closing Copilot read worker')
+    }
+
     logger.debug(`${this.name} stopped`)
   }
 
@@ -188,12 +233,25 @@ export class CopilotMonitor extends BaseMonitor {
         break
       }
 
+      // Hoisted so the catch branch can emit a heartbeat for failed cycles
+      // too — otherwise we lose heap/CPU/breaker visibility for the entire
+      // duration of an outage, which is exactly when we need it most.
+      const cpuBefore = process.cpuUsage()
+      const heapBefore = process.memoryUsage().heapUsed
+      const cycleStart = Date.now()
+
       try {
         await this.breaker.waitIfOpen(signal)
         // 1. Discover files with new data (cheap: stat + ConfigStore comparison)
-        const sessionFiles = await discoverActiveSessionFiles(
+        const allDiscovered = await discoverActiveSessionFiles(
           this.workspaceStoragePath
         )
+
+        // Cap files processed per cycle. Files are pre-sorted mtime-DESC, so
+        // the freshest sessions always go first; older ones drain over later
+        // cycles. See MAX_SESSION_FILES_PER_CYCLE comment for rationale.
+        const sessionFiles = allDiscovered.slice(0, MAX_SESSION_FILES_PER_CYCLE)
+        const deferredCount = allDiscovered.length - sessionFiles.length
 
         // Derive per-file record limit so total stays within MAX_RECORDS_PER_CYCLE
         const recordsPerFile =
@@ -204,11 +262,52 @@ export class CopilotMonitor extends BaseMonitor {
               )
             : MAX_RECORDS_PER_CYCLE
 
-        // 2. Prefetch: read new lines from all files (parallelized I/O)
-        const prefetched = await Promise.all(
-          sessionFiles.map((f) => readNewLines(f.path))
-        )
+        // 2. Prefetch: read new lines from all files via the read worker.
+        // The worker parallelizes fs.read + utf-8 decode + line split off the
+        // extension host main thread. Main-thread work here is only the
+        // configstore lookup for each file's persisted byteOffset.
+        const readRequests = sessionFiles.map((f) => ({
+          path: f.path,
+          byteOffset: getStoredByteOffset(f.path),
+        }))
+        const prefetched = await readNewLinesBatch(readRequests)
+        // Graceful degradation: if the worker is down (returned []), record
+        // a transient failure so the breaker tracks it and the heartbeat
+        // stays visible in DD. Without this, a stuck worker creates an
+        // invisible infinite skip loop (Finding 5).
+        if (prefetched.length !== sessionFiles.length) {
+          this.breaker.recordFailure(
+            new Error('Read worker unavailable or partial response')
+          )
+          logger.warn(
+            {
+              heartbeat: true,
+              data: {
+                requested: sessionFiles.length,
+                received: prefetched.length,
+                cycleOutcome: 'workerUnavailable',
+                breakerFailures: this.breaker.failures,
+                breakerIntervalMs: this.breaker.currentInterval,
+                ...machineContext,
+              },
+            },
+            'Read worker unavailable or partial response — skipping cycle'
+          )
+          continue
+        }
         // File handles are closed — all subsequent work is in-memory
+
+        // Log per-file read errors so they're visible in DD (Finding 8).
+        // Files with errors still return empty lines — they just won't
+        // produce records this cycle and will be retried next poll.
+        for (const result of prefetched) {
+          if (result.error) {
+            logger.warn(
+              { filePath: result.path, error: result.error },
+              'Copilot session file read error'
+            )
+          }
+        }
 
         // 3. Process: build state + extract completed requests (minimal I/O: sessionId recovery only)
         const now = Date.now()
@@ -223,7 +322,7 @@ export class CopilotMonitor extends BaseMonitor {
           if (!state.sessionId) {
             state.sessionId = await readSessionId(filePath)
           }
-          const { records, emittedIds } = processLines(
+          const { records, emittedIds } = await processLines(
             prefetched[i].lines,
             state,
             recordsPerFile
@@ -233,11 +332,19 @@ export class CopilotMonitor extends BaseMonitor {
           if (emittedIds.length > 0) {
             allEmittedIds.push({ state, ids: emittedIds })
           }
+          // Yield to the event loop after each file so a large catch-up
+          // batch doesn't monopolize the extension host. No-op for tiny
+          // sessions; prevents multi-file first-run blocks from feeling
+          // like a freeze even on fast SSDs.
+          await yieldToEventLoop()
         }
 
         // 4. Upload records if any, then advance all cursors
+        let uploadDurationMs: number | undefined
         if (allRecords.length > 0) {
+          const uploadStart = Date.now()
           await uploadCopilotRawRecords(allRecords)
+          uploadDurationMs = Date.now() - uploadStart
           // Commit emitted IDs only after successful upload
           for (const { state, ids } of allEmittedIds) {
             for (const id of ids) {
@@ -285,12 +392,76 @@ export class CopilotMonitor extends BaseMonitor {
         }
 
         this.breaker.recordSuccess()
+
+        // Compute monitoring metrics
+        const totalCharsRead = prefetched.reduce(
+          (sum, p) => sum + p.lines.reduce((s, l) => s + l.length, 0),
+          0
+        )
+        let pendingRequests = 0
+        for (const state of this.sessionStates.values()) {
+          pendingRequests +=
+            state.requestData.size - state.uploadedRequestIds.size
+        }
+
+        // Emit cycle performance metrics
+        const readPerf = consumeReadWorkerPerf()
+        logger.info(
+          {
+            heartbeat: true,
+            data: buildCycleHeartbeat({
+              cpuBefore,
+              heapBefore,
+              cycleStart,
+              breaker: this.breaker,
+              extra: {
+                filesDiscovered: sessionFiles.length,
+                filesDeferred: deferredCount,
+                ...(readPerf && {
+                  readWorkerDurationMs: readPerf.queryDurationMs,
+                  readWorkerHeapUsedBytes: readPerf.heapUsedBytes,
+                  readWorkerRssBytes: readPerf.rssBytes,
+                }),
+                recordsPerFile,
+                recordsProduced: allRecords.length,
+                totalCharsRead,
+                pendingRequests,
+                trackedSessions: this.sessionStates.size,
+                evictedSessions: staleKeys.length,
+                ...(uploadDurationMs != null && { uploadDurationMs }),
+              },
+            }),
+          },
+          'copilot poll cycle'
+        )
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {
           break
         }
-        this.breaker.recordFailure(
-          err instanceof Error ? err : new Error(String(err))
+        const failure = err instanceof Error ? err : new Error(String(err))
+        this.breaker.recordFailure(failure)
+
+        logger.info(
+          {
+            heartbeat: true,
+            data: buildCycleHeartbeat({
+              cpuBefore,
+              heapBefore,
+              cycleStart,
+              breaker: this.breaker,
+              extra: {
+                cycleOutcome: 'failure',
+                errorMessage: failure.message,
+                pendingRequests: [...this.sessionStates.values()].reduce(
+                  (n, s) =>
+                    n + (s.requestData.size - s.uploadedRequestIds.size),
+                  0
+                ),
+                trackedSessions: this.sessionStates.size,
+              },
+            }),
+          },
+          'copilot poll cycle'
         )
       }
     }

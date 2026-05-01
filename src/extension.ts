@@ -14,7 +14,12 @@ import {
   initConfig,
 } from './shared/config'
 import { dailyMcpDetection } from './shared/DailyMcpDetection'
-import { flushLogger, initLogger, logger } from './shared/logger'
+import {
+  flushLogger,
+  initLogger,
+  logger,
+  updateLoggerPlatformTags,
+} from './shared/logger'
 import { MonitorManager } from './shared/MonitorManager'
 import {
   AppType,
@@ -72,6 +77,9 @@ export async function activate(context: vscode.ExtensionContext) {
       throw new Error('Failed to get repository info')
     }
     logger.info(`Repository info: ${JSON.stringify(repoInfo)}`)
+
+    // Enrich DDtags with platform/environment info now that repoInfo is available
+    updateLoggerPlatformTags(repoInfo.appType, repoInfo.ideVersion)
 
     logger.info('Extension activating')
 

@@ -13,6 +13,8 @@ NC='\033[0m' # No Color
 
 # Constants
 DEV_EXTENSION_ID="Mobb.mobb-ai-tracer-dev"
+PROD_EXTENSION_ID="Mobb.mobb-ai-tracer"
+OLD_COPILOT_MONITOR_ID="Mobb.copilot-monitor"
 
 # Defaults
 ENV="local"
@@ -69,6 +71,11 @@ install_to_editor() {
     local display_name=$2
 
     if command -v "$cli_cmd" &> /dev/null; then
+        # Disable production extension and old copilot monitor to prevent
+        # them from competing with the dev extension for the same data
+        echo "  Disabling production extension in $display_name..."
+        "$cli_cmd" --disable-extension "$PROD_EXTENSION_ID" 2>/dev/null || true
+        "$cli_cmd" --disable-extension "$OLD_COPILOT_MONITOR_ID" 2>/dev/null || true
         echo "  Uninstalling old dev extension from $display_name..."
         "$cli_cmd" --uninstall-extension "$DEV_EXTENSION_ID" 2>/dev/null || true
         echo "  Installing new dev extension to $display_name..."

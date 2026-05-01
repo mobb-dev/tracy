@@ -5,7 +5,6 @@ import {
   cleanupStaleCursors,
   createEmptyState,
   processLines,
-  readNewLines,
   readSessionId,
 } from '../../src/copilot/rawProcessor'
 
@@ -90,69 +89,69 @@ function makeRequest(
 // ---------------------------------------------------------------------------
 
 describe('processLines', () => {
-  it('extracts sessionId from kind:0', () => {
+  it('extracts sessionId from kind:0', async () => {
     const state = createEmptyState()
     const lines = [kind0Line('session-abc')]
-    processLines(lines, state)
+    await processLines(lines, state)
     expect(state.sessionId).toBe('session-abc')
   })
 
-  it('seeds requests from kind:0 v.requests', () => {
+  it('seeds requests from kind:0 v.requests', async () => {
     const state = createEmptyState()
     const req = makeRequest('req-1', { text: 'hello world' })
     const lines = [kind0Line('s1', [req])]
-    processLines(lines, state)
+    await processLines(lines, state)
     expect(state.requestData.size).toBe(1)
     expect(state.appearanceOrder[0]).toBe('req-1')
   })
 
-  it('returns completed requests (modelState.value === 1)', () => {
+  it('returns completed requests (modelState.value === 1)', async () => {
     const state = createEmptyState()
     const req = makeRequest('req-1', {
       response: [{ value: 'code here' }],
       modelState: { value: 1, completedAt: 1234567890 },
     })
     const lines = [kind0Line('s1', [req])]
-    const { records } = processLines(lines, state)
+    const { records } = await processLines(lines, state)
     expect(records).toHaveLength(1)
     expect(records[0].request.requestId).toBe('req-1')
     expect(records[0].metadata.sessionId).toBe('s1')
   })
 
-  it('defers incomplete requests (no modelState.completedAt)', () => {
+  it('defers incomplete requests (no modelState.completedAt)', async () => {
     const state = createEmptyState()
     const req = makeRequest('req-1', {
       response: [{ value: 'partial' }],
       modelState: { value: 0 },
     })
     const lines = [kind0Line('s1', [req])]
-    const { records } = processLines(lines, state)
+    const { records } = await processLines(lines, state)
     expect(records).toHaveLength(0)
   })
 
-  it('skips cancelled requests (modelState.value === 2)', () => {
+  it('skips cancelled requests (modelState.value === 2)', async () => {
     const state = createEmptyState()
     const req = makeRequest('req-1', {
       response: [{ value: 'partial' }],
       modelState: { value: 2, completedAt: 1234567890 },
     })
     const lines = [kind0Line('s1', [req])]
-    const { records } = processLines(lines, state)
+    const { records } = await processLines(lines, state)
     expect(records).toHaveLength(0)
   })
 
-  it('skips requests with empty response', () => {
+  it('skips requests with empty response', async () => {
     const state = createEmptyState()
     const req = makeRequest('req-1', {
       response: [],
       modelState: { value: 1, completedAt: 1234567890 },
     })
     const lines = [kind0Line('s1', [req])]
-    const { records } = processLines(lines, state)
+    const { records } = await processLines(lines, state)
     expect(records).toHaveLength(0)
   })
 
-  it('applies kind:1 patches to result and modelState', () => {
+  it('applies kind:1 patches to result and modelState', async () => {
     const state = createEmptyState()
     // First: seed request from kind:0
     const req = makeRequest('req-1', { response: [{ value: 'code' }] })
@@ -162,14 +161,14 @@ describe('processLines', () => {
       kind1Line(['requests', 0, 'result'], { timings: { totalElapsed: 5000 } }),
       kind1Line(['requests', 0, 'modelState'], { value: 1, completedAt: 9999 }),
     ]
-    const { records } = processLines(lines, state)
+    const { records } = await processLines(lines, state)
     expect(records).toHaveLength(1)
     expect(records[0].request.result).toEqual({
       timings: { totalElapsed: 5000 },
     })
   })
 
-  it('updates response from kind:2 snapshot', () => {
+  it('updates response from kind:2 snapshot', async () => {
     const state = createEmptyState()
     // Seed with kind:0
     const lines = [
@@ -192,12 +191,12 @@ describe('processLines', () => {
         },
       ]),
     ]
-    const { records } = processLines(lines, state)
+    const { records } = await processLines(lines, state)
     expect(records).toHaveLength(1)
     expect(records[0].request.response).toHaveLength(2)
   })
 
-  it('handles multi-turn: multiple requests complete across polls', () => {
+  it('handles multi-turn: multiple requests complete across polls', async () => {
     const state = createEmptyState()
 
     // Poll 1: first request completes
@@ -209,7 +208,10 @@ describe('processLines', () => {
         }),
       ]),
     ]
-    const { records: records1, emittedIds: ids1 } = processLines(lines1, state)
+    const { records: records1, emittedIds: ids1 } = await processLines(
+      lines1,
+      state
+    )
     expect(records1).toHaveLength(1)
     expect(records1[0].request.requestId).toBe('req-1')
     // Simulate successful upload — commit emitted IDs
@@ -228,12 +230,12 @@ describe('processLines', () => {
         }),
       ]),
     ]
-    const { records: records2 } = processLines(lines2, state)
+    const { records: records2 } = await processLines(lines2, state)
     expect(records2).toHaveLength(1)
     expect(records2[0].request.requestId).toBe('req-2')
   })
 
-  it('does not re-emit already uploaded requests', () => {
+  it('does not re-emit already uploaded requests', async () => {
     const state = createEmptyState()
     const req = makeRequest('req-1', {
       response: [{ value: 'code' }],
@@ -241,7 +243,7 @@ describe('processLines', () => {
     })
 
     // First poll: emits the record
-    const { records: records1, emittedIds: ids1 } = processLines(
+    const { records: records1, emittedIds: ids1 } = await processLines(
       [kind0Line('s1', [req])],
       state
     )
@@ -252,11 +254,14 @@ describe('processLines', () => {
     }
 
     // Second poll: same data, should not re-emit
-    const { records: records2 } = processLines([kind0Line('s1', [req])], state)
+    const { records: records2 } = await processLines(
+      [kind0Line('s1', [req])],
+      state
+    )
     expect(records2).toHaveLength(0)
   })
 
-  it('filters empty placeholder requests from kind:2', () => {
+  it('filters empty placeholder requests from kind:2', async () => {
     const state = createEmptyState()
     const lines = [
       kind0Line('s1'),
@@ -269,12 +274,12 @@ describe('processLines', () => {
         }),
       ]),
     ]
-    const { records } = processLines(lines, state)
+    const { records } = await processLines(lines, state)
     expect(records).toHaveLength(1)
     expect(records[0].request.requestId).toBe('req-1')
   })
 
-  it('handles old format: kind:2 with complete request (response + result + modelState)', () => {
+  it('handles old format: kind:2 with complete request (response + result + modelState)', async () => {
     const state = createEmptyState()
     const lines = [
       kind0Line('s1'),
@@ -286,14 +291,14 @@ describe('processLines', () => {
         }),
       ]),
     ]
-    const { records } = processLines(lines, state)
+    const { records } = await processLines(lines, state)
     expect(records).toHaveLength(1)
     expect(records[0].request.result).toEqual({
       metadata: { toolCallRounds: [] },
     })
   })
 
-  it('handles new format: kind:2 response only, kind:1 delivers result + modelState', () => {
+  it('handles new format: kind:2 response only, kind:1 delivers result + modelState', async () => {
     const state = createEmptyState()
     const lines = [
       kind0Line('s1', [
@@ -313,12 +318,12 @@ describe('processLines', () => {
       kind1Line(['requests', 0, 'result'], { timings: { totalElapsed: 8000 } }),
       kind1Line(['requests', 0, 'modelState'], { value: 1, completedAt: 7777 }),
     ]
-    const { records } = processLines(lines, state)
+    const { records } = await processLines(lines, state)
     expect(records).toHaveLength(1)
     expect(records[0].request.response).toEqual([{ value: 'streaming...' }])
   })
 
-  it('handles kind:2 reindexing + kind:1 patches at original index', () => {
+  it('handles kind:2 reindexing + kind:1 patches at original index', async () => {
     const state = createEmptyState()
     // kind:0 seeds request at index 2 (there are requests 0,1,2)
     const lines = [
@@ -337,7 +342,7 @@ describe('processLines', () => {
         }),
       ]),
     ]
-    processLines(lines, state)
+    await processLines(lines, state)
     expect(state.requestData.size).toBe(3)
     expect(state.appearanceOrder).toEqual(['req-0', 'req-1', 'req-2'])
 
@@ -351,7 +356,7 @@ describe('processLines', () => {
         },
       ]),
     ]
-    processLines(lines2, state)
+    await processLines(lines2, state)
     // req-2 data should be updated regardless of kind:2 index
     expect(state.requestData.get('req-2')?.response).toEqual([
       { value: 'updated' },
@@ -362,7 +367,7 @@ describe('processLines', () => {
       kind1Line(['requests', 2, 'result'], { timings: { totalElapsed: 5000 } }),
       kind1Line(['requests', 2, 'modelState'], { value: 1, completedAt: 9999 }),
     ]
-    const { records } = processLines(lines3, state)
+    const { records } = await processLines(lines3, state)
     expect(records).toHaveLength(1)
     expect(records[0].request.requestId).toBe('req-2')
     expect(records[0].request.result).toEqual({
@@ -370,7 +375,7 @@ describe('processLines', () => {
     })
   })
 
-  it('eagerly collects first request when kind:2 replaces it with second request (single poll)', () => {
+  it('eagerly collects first request when kind:2 replaces it with second request (single poll)', async () => {
     const state = createEmptyState()
     // Simulates: prompt 1 completes, then kind:2 replaces index 0 with prompt 2, then prompt 2 completes
     const lines = [
@@ -395,13 +400,13 @@ describe('processLines', () => {
       // kind:1 completes request 2 (at original index 1, but state has it at 0)
       kind1Line(['requests', 1, 'modelState'], { value: 1, completedAt: 2000 }),
     ]
-    const { records } = processLines(lines, state)
+    const { records } = await processLines(lines, state)
     expect(records).toHaveLength(2)
     expect(records[0].request.requestId).toBe('req-1')
     expect(records[1].request.requestId).toBe('req-2')
   })
 
-  it('ignores malformed JSON lines', () => {
+  it('ignores malformed JSON lines', async () => {
     const state = createEmptyState()
     const lines = [
       'not valid json',
@@ -412,11 +417,11 @@ describe('processLines', () => {
         }),
       ]),
     ]
-    const { records } = processLines(lines, state)
+    const { records } = await processLines(lines, state)
     expect(records).toHaveLength(1)
   })
 
-  it('respects maxRecords cap', () => {
+  it('respects maxRecords cap', async () => {
     const state = createEmptyState()
     const requests = Array.from({ length: 5 }, (_, i) =>
       makeRequest(`req-${i}`, {
@@ -425,14 +430,14 @@ describe('processLines', () => {
       })
     )
     const lines = [kind0Line('s1', requests)]
-    const { records, emittedIds } = processLines(lines, state, 2)
+    const { records, emittedIds } = await processLines(lines, state, 2)
     expect(records).toHaveLength(2)
     expect(emittedIds).toHaveLength(2)
     // uploadedRequestIds is not populated until caller commits
     expect(state.uploadedRequestIds.size).toBe(0)
   })
 
-  it('emits stuck requests after timeout', () => {
+  it('emits stuck requests after timeout', async () => {
     const state = createEmptyState()
     // Seed a request with response but no completedAt
     const req = makeRequest('req-stuck', {
@@ -440,7 +445,7 @@ describe('processLines', () => {
       modelState: { value: 0 },
     })
     const lines = [kind0Line('s1', [req])]
-    processLines(lines, state)
+    await processLines(lines, state)
     expect(state.requestData.has('req-stuck')).toBe(true)
 
     // Manually set firstSeenAt to 35 minutes ago (exceeds 30 min timeout)
@@ -448,142 +453,50 @@ describe('processLines', () => {
     entry.firstSeenAt = Date.now() - 35 * 60 * 1000
 
     // Process with empty lines — stuck detection happens during assembly
-    const { records } = processLines([], state)
+    const { records } = await processLines([], state)
     expect(records).toHaveLength(1)
     expect(records[0].request.requestId).toBe('req-stuck')
   })
 
-  it('emits plan mode completion (modelState.value === 3)', () => {
+  it('emits plan mode completion (modelState.value === 3)', async () => {
     const state = createEmptyState()
     const req = makeRequest('req-plan', {
       response: [{ value: 'plan output' }],
       modelState: { value: 3, completedAt: 9999 },
     })
     const lines = [kind0Line('s1', [req])]
-    const { records } = processLines(lines, state)
+    const { records } = await processLines(lines, state)
     expect(records).toHaveLength(1)
     expect(records[0].request.requestId).toBe('req-plan')
     expect(records[0].metadata.sessionId).toBe('s1')
   })
-})
 
-// ---------------------------------------------------------------------------
-// readNewLines
-// ---------------------------------------------------------------------------
-
-describe('readNewLines', () => {
-  it('returns lines when file has grown since last read', async () => {
-    const jsonlLine = JSON.stringify({ kind: 0, v: { sessionId: 'abc' } })
-    const newBytes = Buffer.from(`${jsonlLine}\n`)
-
-    mockConfigStore.get.mockReturnValue({
-      byteOffset: 100,
-      fileSize: 100,
-      updatedAt: Date.now(),
-    })
-    mockFsStat.mockResolvedValue({ size: 100 + newBytes.length })
-
-    const mockRead = vi.fn().mockResolvedValue({ bytesRead: newBytes.length })
-    const mockClose = vi.fn().mockResolvedValue(undefined)
-    mockFsOpen.mockResolvedValue({ read: mockRead, close: mockClose })
-
-    // Mock read to fill the buffer with newBytes content
-    mockRead.mockImplementation(
-      (buffer: Buffer, _offset: number, _length: number, _position: number) => {
-        newBytes.copy(buffer, 0)
-        return Promise.resolve({ bytesRead: newBytes.length })
-      }
-    )
-
-    const result = await readNewLines('/tmp/session.jsonl')
-    expect(result.lines).toHaveLength(1)
-    expect(result.newByteOffset).toBe(100 + newBytes.length)
-    expect(result.newFileSize).toBe(100 + newBytes.length)
-    expect(mockClose).toHaveBeenCalled()
-  })
-
-  it('returns empty lines when no new data', async () => {
-    mockConfigStore.get.mockReturnValue({
-      byteOffset: 500,
-      fileSize: 500,
-      updatedAt: Date.now(),
-    })
-    mockFsStat.mockResolvedValue({ size: 500 })
-
-    const result = await readNewLines('/tmp/session.jsonl')
-    expect(result.lines).toHaveLength(0)
-    expect(result.newByteOffset).toBe(500)
-    expect(result.newFileSize).toBe(500)
-    expect(mockFsOpen).not.toHaveBeenCalled()
-  })
-
-  it('resets offset to 0 on file truncation', async () => {
-    const fullContent = JSON.stringify({ kind: 0, v: { sessionId: 'new' } })
-    const contentBuf = Buffer.from(`${fullContent}\n`)
-
-    mockConfigStore.get.mockReturnValue({
-      byteOffset: 1000,
-      fileSize: 1000,
-      updatedAt: Date.now(),
-    })
-    // File was truncated — size is smaller than stored offset
-    mockFsStat.mockResolvedValue({ size: contentBuf.length })
-
-    const mockRead = vi
-      .fn()
-      .mockImplementation(
-        (
-          buffer: Buffer,
-          _offset: number,
-          _length: number,
-          _position: number
-        ) => {
-          contentBuf.copy(buffer, 0)
-          return Promise.resolve({ bytesRead: contentBuf.length })
-        }
+  it('handles >1000 lines correctly (exercises YIELD_EVERY_LINES path)', async () => {
+    const state = createEmptyState()
+    // Build 1200+ lines: kind:0 header, then 1200 kind:2 updates
+    const lines: string[] = [kind0Line('s-big')]
+    const requestCount = 1200
+    for (let i = 0; i < requestCount; i++) {
+      lines.push(
+        kind2Line([
+          makeRequest(`req-${i}`, {
+            text: `prompt-${i}`,
+            response: [{ value: `resp-${i}` }],
+            modelState: { value: 1, completedAt: 1000 + i },
+          }),
+        ])
       )
-    const mockClose = vi.fn().mockResolvedValue(undefined)
-    mockFsOpen.mockResolvedValue({ read: mockRead, close: mockClose })
+    }
+    expect(lines.length).toBeGreaterThan(1000)
 
-    const result = await readNewLines('/tmp/session.jsonl')
-    expect(result.lines).toHaveLength(1)
-    // Should read from start (offset 0) to end
-    expect(result.newByteOffset).toBe(contentBuf.length)
-  })
-
-  it('reads from byte 0 on first run (no stored cursor)', async () => {
-    const content = JSON.stringify({ kind: 0, v: { sessionId: 'first' } })
-    const contentBuf = Buffer.from(`${content}\n`)
-
-    // No cursor stored
-    mockConfigStore.get.mockReturnValue(undefined)
-    mockFsStat.mockResolvedValue({ size: contentBuf.length })
-
-    const mockRead = vi
-      .fn()
-      .mockImplementation(
-        (
-          buffer: Buffer,
-          _offset: number,
-          _length: number,
-          _position: number
-        ) => {
-          contentBuf.copy(buffer, 0)
-          return Promise.resolve({ bytesRead: contentBuf.length })
-        }
-      )
-    const mockClose = vi.fn().mockResolvedValue(undefined)
-    mockFsOpen.mockResolvedValue({ read: mockRead, close: mockClose })
-
-    const result = await readNewLines('/tmp/session.jsonl')
-    expect(result.lines).toHaveLength(1)
-    expect(result.newByteOffset).toBe(contentBuf.length)
-    // read should be called with position 0
-    expect(mockRead).toHaveBeenCalledWith(
-      expect.any(Buffer),
-      0,
-      contentBuf.length,
-      0
+    const { records, emittedIds } = await processLines(lines, state)
+    expect(records).toHaveLength(requestCount)
+    expect(emittedIds).toHaveLength(requestCount)
+    expect(state.sessionId).toBe('s-big')
+    // Verify first and last records are correct
+    expect(records[0].request.requestId).toBe('req-0')
+    expect(records[requestCount - 1].request.requestId).toBe(
+      `req-${requestCount - 1}`
     )
   })
 })
@@ -659,7 +572,7 @@ describe('readSessionId', () => {
 // ---------------------------------------------------------------------------
 
 describe('advanceCursor', () => {
-  it('stores byte offset and file size in configStore', () => {
+  it('stores byte offset and file size in configStore', async () => {
     advanceCursor('/some/path/session.jsonl', 5000, 5000)
     expect(mockConfigStore.set).toHaveBeenCalledWith(
       expect.stringContaining('copilot.session.'),
@@ -677,7 +590,7 @@ describe('advanceCursor', () => {
 // ---------------------------------------------------------------------------
 
 describe('cleanupStaleCursors', () => {
-  it('deletes stale cursor keys older than 14 days', () => {
+  it('deletes stale cursor keys older than 14 days', async () => {
     const staleTime = Date.now() - 15 * 24 * 60 * 60 * 1000
     mockConfigStore.get.mockReturnValue(undefined) // no lastCleanupAt
     mockConfigStore.all = {
@@ -702,7 +615,7 @@ describe('cleanupStaleCursors', () => {
     )
   })
 
-  it('skips cleanup if last cleanup was recent', () => {
+  it('skips cleanup if last cleanup was recent', async () => {
     mockConfigStore.get.mockReturnValue(Date.now() - 1000)
     cleanupStaleCursors()
     expect(mockConfigStore.delete).not.toHaveBeenCalled()

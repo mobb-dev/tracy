@@ -41,10 +41,19 @@ const mainBuild = {
 
 // DB worker runs in a separate Worker thread — must be a separate bundle.
 // Loaded at runtime via: new Worker(path.join(__dirname, 'dbWorker.js'))
-const workerBuild = {
+const dbWorkerBuild = {
   ...sharedOptions,
   entryPoints: ['src/cursor/dbWorker.ts'],
   outfile: 'out/dbWorker.js',
+}
+
+// Copilot read worker — handles JSONL file I/O + line splitting off the
+// extension host main thread. Loaded at runtime via:
+//   new Worker(path.join(__dirname, 'readWorker.js'))
+const copilotReadWorkerBuild = {
+  ...sharedOptions,
+  entryPoints: ['src/copilot/readWorker.ts'],
+  outfile: 'out/readWorker.js',
 }
 
 // Loaded at runtime via: new Worker(path.join(__dirname, 'contextFileWorker.js'))
@@ -54,23 +63,17 @@ const contextFileWorkerBuild = {
   outfile: 'out/contextFileWorker.js',
 }
 
+const allBuilds = [mainBuild, dbWorkerBuild, copilotReadWorkerBuild, contextFileWorkerBuild]
+
 try {
   if (isWatch) {
     // Note: watch mode only bundles — it does not type-check.
     // Use your IDE for live type errors, or run `npm run typecheck` separately.
-    const [mainCtx, workerCtx, ctxFileWorkerCtx] = await Promise.all([
-      esbuild.context(mainBuild),
-      esbuild.context(workerBuild),
-      esbuild.context(contextFileWorkerBuild),
-    ])
-    await Promise.all([mainCtx.watch(), workerCtx.watch(), ctxFileWorkerCtx.watch()])
+    const contexts = await Promise.all(allBuilds.map((b) => esbuild.context(b)))
+    await Promise.all(contexts.map((c) => c.watch()))
     console.log('[esbuild] Watching for changes...')
   } else {
-    await Promise.all([
-      esbuild.build(mainBuild),
-      esbuild.build(workerBuild),
-      esbuild.build(contextFileWorkerBuild),
-    ])
+    await Promise.all(allBuilds.map((b) => esbuild.build(b)))
     console.log('[esbuild] Build complete')
   }
 } catch (err) {

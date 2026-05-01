@@ -137,6 +137,43 @@ export const baseLayout = (
           word-wrap: break-word;
           white-space: pre-wrap;
         }
+        .code-change-message {
+          margin-bottom: 16px;
+          margin-right: auto;
+          max-width: 100%;
+        }
+        .code-change-message .message-header {
+          justify-content: flex-start;
+          font-size: 0.9em;
+          opacity: 0.8;
+          margin-bottom: 4px;
+        }
+        .code-change-header {
+          font-family: var(--vscode-editor-font-family, monospace);
+          font-size: 0.85em;
+          opacity: 0.8;
+          margin-bottom: 4px;
+        }
+        .code-change-diff {
+          margin: 0;
+          padding: 8px;
+          border-radius: 4px;
+          font-family: var(--vscode-editor-font-family, monospace);
+          font-size: 0.85em;
+          background-color: var(--vscode-textBlockQuote-background);
+          overflow-x: auto;
+          white-space: pre;
+        }
+        .diff-add {
+          color: var(--vscode-gitDecoration-addedResourceForeground);
+        }
+        .diff-del {
+          color: var(--vscode-gitDecoration-deletedResourceForeground);
+        }
+        .diff-ctx {
+          color: var(--vscode-foreground);
+          opacity: 0.7;
+        }
         .conversation-loading {
           display: flex;
           align-items: center;

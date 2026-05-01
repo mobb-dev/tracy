@@ -223,7 +223,7 @@ describe('Claude Code E2E with Hook Integration', () => {
         '# Test Rule\n\nAlways add JSDoc comments to exported functions.\n'
       )
 
-      // ── Commands (.claude/commands/*.md → category:skill, zipped) ──────────
+      // ── Commands (.claude/commands/*.md → category:command, regular file) ──
       fs.mkdirSync(path.join(testWorkspaceDir, '.claude', 'commands'), {
         recursive: true,
       })
@@ -479,7 +479,7 @@ describe('Claude Code E2E with Hook Integration', () => {
 
       // Each context file gets its own Tracy record:
       //   recordId = "ctx:{sessionId}:{md5}", with a `context` metadata field.
-      // Skills and commands are zipped (rawDataS3Key ends in .zip);
+      // Skills are zipped (rawDataS3Key ends in .zip);
       // all other categories are plain text (ends in .bin).
       type ExpectedCtx = {
         label: string
@@ -523,13 +523,15 @@ describe('Claude Code E2E with Hook Integration', () => {
           expectedContent:
             '# Test Rule\n\nAlways add JSDoc comments to exported functions.\n',
         },
-        // ── Commands (skill category, zipped) ────────────────────────────────
+        // ── Commands (T-491: regular file, NOT a skill) ──────────────────────
         {
           label: '.claude/commands/my-command.md',
           match: (r) =>
-            r.context?.name === 'my-command' &&
-            r.context?.category === 'skill',
-          category: 'skill',
+            r.context?.name === '.claude/commands/my-command.md' &&
+            r.context?.category === 'command',
+          category: 'command',
+          expectedContent:
+            '---\ndescription: My custom command\n---\n\nRun this whenever needed.\n',
         },
         // ── Skill bundles (zipped) ────────────────────────────────────────────
         {
@@ -630,7 +632,7 @@ describe('Claude Code E2E with Hook Integration', () => {
         expect(s3Key, `${exp.label}: rawDataS3Key`).toBeTruthy()
 
         if (exp.category === 'skill') {
-          // Skills and commands are zipped — key ends in .zip
+          // Skills are zipped — key ends in .zip
           expect(s3Key, `${exp.label}: S3 key should end in .zip`).toMatch(
             /\.zip$/
           )

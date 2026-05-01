@@ -11,6 +11,7 @@ import {
 import { getConfig } from '../shared/config'
 import { BaseMonitor } from '../shared/IMonitor'
 import { logger } from '../shared/logger'
+import { machineContext } from '../shared/machineContext'
 import { AppType, getNormalizedRepoUrl } from '../shared/repositoryInfo'
 import { uploadTracyRecords } from '../shared/uploader'
 import { AcceptanceTracker } from './AcceptanceTracker'
@@ -89,7 +90,26 @@ export class CursorTabMonitor extends BaseMonitor {
           })
 
           stream.on('end', () => {
-            this.processLogEntries(newContent)
+            const cpuBefore = process.cpuUsage()
+            const processStart = Date.now()
+
+            const linesProcessed = this.processLogEntries(newContent)
+
+            const cpuDelta = process.cpuUsage(cpuBefore)
+            logger.info(
+              {
+                heartbeat: true,
+                data: {
+                  processDurationMs: Date.now() - processStart,
+                  cpuUserUs: cpuDelta.user,
+                  cpuSystemUs: cpuDelta.system,
+                  charsRead: newContent.length,
+                  linesProcessed,
+                  ...machineContext,
+                },
+              },
+              'cursor tab cycle'
+            )
             lastSize = curr.size
           })
 
@@ -130,7 +150,7 @@ export class CursorTabMonitor extends BaseMonitor {
     logger.info(`${this.name} stopped`)
   }
 
-  private processLogEntries(content: string): void {
+  private processLogEntries(content: string): number {
     const lines = content.split('\n').filter((line) => line.trim())
 
     // First pass: collect removed and added lines
@@ -154,19 +174,19 @@ export class CursorTabMonitor extends BaseMonitor {
 
     if (additions.length === 0) {
       logger.debug('Cursor tab: empty additions, skipping')
-      return
+      return lines.length
     }
 
     if (additions.length < 28) {
       logger.debug(
         `Cursor tab: additions too short (${additions.length} chars), skipping`
       )
-      return
+      return lines.length
     }
 
     if (!this.activeEditorUri) {
       logger.debug('Cursor tab: no active editor, skipping')
-      return
+      return lines.length
     }
 
     logger.info(`Cursor tab: tracking ${additions.length} chars`)
@@ -176,6 +196,7 @@ export class CursorTabMonitor extends BaseMonitor {
       additions,
       this.activeEditorUri
     )
+    return lines.length
   }
 
   private uploadAcceptedCompletion(additions: string): void {

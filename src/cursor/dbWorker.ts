@@ -26,6 +26,12 @@ type WorkerResponse = {
   id: number
   result?: unknown
   error?: string
+  perf?: {
+    queryDurationMs: number
+    heapUsedBytes: number
+    rssBytes: number
+    rowsReturned: number
+  }
 }
 
 /**
@@ -63,6 +69,9 @@ function getConnection(): InstanceType<typeof DatabaseSync> {
     // the journal check became its own failure mode. 3s is well below the
     // 10s worker-request timeout, so we still fail fast on genuine hangs.
     db.exec('PRAGMA busy_timeout = 3000')
+    // No cached prepared statements — the worker is recycled after every
+    // poll cycle (to reset its V8 heap), so statements are never reused
+    // across cycles. Caching them was misleading (PR review Finding 9).
   }
   return db
 }
@@ -97,8 +106,9 @@ function postDiagnostic(
 }
 
 /**
- * Execute a query. On failure, close the connection (releasing any SHARED
- * locks) and re-throw. No retries — the poll loop handles that.
+ * Execute a query. Ensures the connection + cached statements are ready.
+ * On failure, close the connection (invalidates cached statements too)
+ * and re-throw. No retries — the poll loop handles that.
  *
  * Routes `SQLITE_BUSY` / "database is locked" errors back to the main
  * thread as a diagnostic so lock contention remains visible after the
@@ -106,8 +116,9 @@ function postDiagnostic(
  * `PRAGMA busy_timeout = 3000` in `getConnection`).
  */
 function execute<T>(fn: (conn: InstanceType<typeof DatabaseSync>) => T): T {
+  const conn = getConnection()
   try {
-    return fn(getConnection())
+    return fn(conn)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     if (msg.includes('SQLITE_BUSY') || msg.includes('database is locked')) {
@@ -134,8 +145,9 @@ const DEFAULT_BUBBLES_LIMIT: number = sessionBubblesLimit ?? 50
  */
 function getRecentBubbleKeys(limit: number): DBRow[] {
   return execute((conn) => {
-    const sql = `SELECT key FROM cursorDiskKV WHERE key LIKE 'bubbleId:%' ORDER BY rowid DESC LIMIT ?`
-    const stmt = conn.prepare(sql)
+    const stmt = conn.prepare(
+      `SELECT key FROM cursorDiskKV WHERE key LIKE 'bubbleId:%' ORDER BY rowid DESC LIMIT ?`
+    )
     return stmt.all(limit) as DBRow[]
   })
 }
@@ -346,21 +358,33 @@ function prefetchSessions(
 // Message handler
 parentPort?.on('message', (msg: WorkerRequest) => {
   const { id, method, params } = msg
+
+  const queryStart = Date.now()
   let response: WorkerResponse
 
   try {
     let result: unknown
+    let rowsReturned = 0
 
     switch (method) {
-      case 'getRecentBubbleKeys':
-        result = getRecentBubbleKeys(params.limit as number)
+      case 'getRecentBubbleKeys': {
+        const rows = getRecentBubbleKeys(params.limit as number)
+        rowsReturned = rows.length
+        result = rows
         break
-      case 'prefetchSessions':
-        result = prefetchSessions(
+      }
+      case 'prefetchSessions': {
+        const sessions = prefetchSessions(
           params.sessions as SessionRequest[],
           params.bubblesLimit as number | undefined
         )
+        rowsReturned = sessions.reduce(
+          (n, s) => n + s.bubbles.length + s.revisitedBubbles.length,
+          0
+        )
+        result = sessions
         break
+      }
       case 'close':
         closeConnection()
         result = true
@@ -369,7 +393,17 @@ parentPort?.on('message', (msg: WorkerRequest) => {
         throw new Error(`Unknown method: ${method}`)
     }
 
-    response = { id, result }
+    const workerMem = process.memoryUsage()
+    response = {
+      id,
+      result,
+      perf: {
+        queryDurationMs: Date.now() - queryStart,
+        heapUsedBytes: workerMem.heapUsed,
+        rssBytes: workerMem.rss,
+        rowsReturned,
+      },
+    }
   } catch (err) {
     response = {
       id,
@@ -377,9 +411,8 @@ parentPort?.on('message', (msg: WorkerRequest) => {
     }
   }
 
-  // Close connection after every request to release SHARED locks immediately.
-  // Re-opening is ~1ms — negligible vs the 20-second poll interval.
-  closeConnection()
-
+  // Connection stays open for the duration of the worker's lifetime.
+  // The worker is recycled after each poll cycle by CursorMonitor,
+  // which resets the V8 heap and all native SQLite memory.
   parentPort?.postMessage(response)
 })
