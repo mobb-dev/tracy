@@ -118,10 +118,14 @@ vi.mock('../src/shared/logger', () => ({
 const REPO_A = {
   gitRepoUrl: 'https://github.com/org/repo-a',
   gitRoot: '/workspace/repo-a',
+  branch: 'main',
+  commitSha: '0123456789abcdef0123456789abcdef01234567',
 }
 const REPO_B = {
   gitRepoUrl: 'https://github.com/org/repo-b',
   gitRoot: '/workspace/repo-b',
+  branch: 'main',
+  commitSha: '0123456789abcdef0123456789abcdef01234567',
 }
 const ORG_ID = 'org-123'
 

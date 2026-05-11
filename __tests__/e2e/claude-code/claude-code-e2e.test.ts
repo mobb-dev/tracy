@@ -452,6 +452,13 @@ describe('Claude Code E2E with Hook Integration', () => {
       expect(record.clientVersion).toBeTruthy()
       expect(record.rawDataS3Key).toBeTruthy()
 
+      // The fixture runs in a real git repo (shared/git-utils.ts), so the
+      // daemon should sample branch + commitSha at transcript-process time.
+      // Branch must not be the detached-HEAD sentinel; SHA must be 40-hex.
+      expect(record.branch).toMatch(/^[A-Za-z0-9._\-\/]+$/)
+      expect(record.branch).not.toBe('HEAD')
+      expect(record.commitSha).toMatch(/^[0-9a-f]{40}$/)
+
       // rawData is uploaded to S3 via presigned URL — retrieve from mock S3 store
       const s3Uploads = mockServer.getS3Uploads()
       const s3Content = s3Uploads.get(record.rawDataS3Key!)

@@ -109,6 +109,12 @@ function assertCopilotRecordShape(
   expect(record.computerName).toBeTruthy()
   expect(record.userName).toBeTruthy()
 
+  // Branch must look like a real ref, never the detached-HEAD sentinel "HEAD".
+  expect(record.branch).toMatch(/^[A-Za-z0-9._\-\/]+$/)
+  expect(record.branch).not.toBe('HEAD')
+  // Commit SHA must be lowercase 40-hex.
+  expect(record.commitSha).toMatch(/^[0-9a-f]{40}$/)
+
   const rawData = decodeCopilotRawData(record, server)
   expect(rawData.request).toBeDefined()
   expect(rawData.request.requestId).toBeTruthy()

@@ -78,6 +78,15 @@ function assertTracyRecordShape(record: TracyRecord, server: MockUploadServer): 
   // repositoryUrl should be resolved from the workspace
   expect(record.repositoryUrl).toBeTruthy()
 
+  // branch must be a real branch name, not the literal "HEAD" sentinel that
+  // `git rev-parse --abbrev-ref HEAD` returns in detached-HEAD state. Guards
+  // the detached-HEAD phantom-branch bug.
+  expect(record.branch).toMatch(/^[A-Za-z0-9._\-\/]+$/)
+  expect(record.branch).not.toBe('HEAD')
+
+  // commitSha must be a lowercase 40-hex git SHA.
+  expect(record.commitSha).toMatch(/^[0-9a-f]{40}$/)
+
   // Inner rawData structure (CursorRawData)
   const rawData = decodeTracyRawData(record, server)
 

@@ -74,9 +74,11 @@ describe('getRelevantRepo', () => {
   it('returns first repo for single-repo setup regardless of filePath', async () => {
     const { getRelevantRepo, _setRepoInfoForTesting } =
       await import('../src/shared/repositoryInfo')
-    const repo = {
+    const repo: GitRepository = {
       gitRoot: '/workspace/project',
       gitRepoUrl: 'https://github.com/test/repo.git',
+      branch: 'main',
+      commitSha: '0123456789abcdef0123456789abcdef01234567',
     }
     _setRepoInfoForTesting(makeRepoInfo([repo]))
     expect(getRelevantRepo('/unrelated/path')).toBe(repo)
@@ -86,13 +88,17 @@ describe('getRelevantRepo', () => {
   it('matches correct repo by filePath in multi-repo setup', async () => {
     const { getRelevantRepo, _setRepoInfoForTesting } =
       await import('../src/shared/repositoryInfo')
-    const repoA = {
+    const repoA: GitRepository = {
       gitRoot: '/workspace/alpha',
       gitRepoUrl: 'https://github.com/test/alpha.git',
+      branch: 'main',
+      commitSha: '0123456789abcdef0123456789abcdef01234567',
     }
-    const repoB = {
+    const repoB: GitRepository = {
       gitRoot: '/workspace/beta',
       gitRepoUrl: 'https://github.com/test/beta.git',
+      branch: 'main',
+      commitSha: '0123456789abcdef0123456789abcdef01234567',
     }
     _setRepoInfoForTesting(makeRepoInfo([repoA, repoB]))
     expect(getRelevantRepo('/workspace/alpha/src/index.ts')).toBe(repoA)
@@ -102,13 +108,17 @@ describe('getRelevantRepo', () => {
   it('avoids prefix collision: /project does not match /project-utils', async () => {
     const { getRelevantRepo, _setRepoInfoForTesting } =
       await import('../src/shared/repositoryInfo')
-    const repoShort = {
+    const repoShort: GitRepository = {
       gitRoot: '/workspace/project',
       gitRepoUrl: 'https://github.com/test/project.git',
+      branch: 'main',
+      commitSha: '0123456789abcdef0123456789abcdef01234567',
     }
-    const repoLong = {
+    const repoLong: GitRepository = {
       gitRoot: '/workspace/project-utils',
       gitRepoUrl: 'https://github.com/test/project-utils.git',
+      branch: 'main',
+      commitSha: '0123456789abcdef0123456789abcdef01234567',
     }
     _setRepoInfoForTesting(makeRepoInfo([repoShort, repoLong]))
 
@@ -123,13 +133,17 @@ describe('getRelevantRepo', () => {
   it('returns null for multi-repo when filePath matches no repo', async () => {
     const { getRelevantRepo, _setRepoInfoForTesting } =
       await import('../src/shared/repositoryInfo')
-    const repoA = {
+    const repoA: GitRepository = {
       gitRoot: '/workspace/alpha',
       gitRepoUrl: 'https://github.com/test/alpha.git',
+      branch: 'main',
+      commitSha: '0123456789abcdef0123456789abcdef01234567',
     }
-    const repoB = {
+    const repoB: GitRepository = {
       gitRoot: '/workspace/beta',
       gitRepoUrl: 'https://github.com/test/beta.git',
+      branch: 'main',
+      commitSha: '0123456789abcdef0123456789abcdef01234567',
     }
     _setRepoInfoForTesting(makeRepoInfo([repoA, repoB]))
     expect(getRelevantRepo('/somewhere/else/file.ts')).toBeNull()
@@ -138,13 +152,17 @@ describe('getRelevantRepo', () => {
   it('returns null for multi-repo when filePath is not provided', async () => {
     const { getRelevantRepo, _setRepoInfoForTesting } =
       await import('../src/shared/repositoryInfo')
-    const repoA = {
+    const repoA: GitRepository = {
       gitRoot: '/workspace/alpha',
       gitRepoUrl: 'https://github.com/test/alpha.git',
+      branch: 'main',
+      commitSha: '0123456789abcdef0123456789abcdef01234567',
     }
-    const repoB = {
+    const repoB: GitRepository = {
       gitRoot: '/workspace/beta',
       gitRepoUrl: 'https://github.com/test/beta.git',
+      branch: 'main',
+      commitSha: '0123456789abcdef0123456789abcdef01234567',
     }
     _setRepoInfoForTesting(makeRepoInfo([repoA, repoB]))
     expect(getRelevantRepo()).toBeNull()

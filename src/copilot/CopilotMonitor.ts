@@ -13,7 +13,7 @@ import { getConfig } from '../shared/config'
 import { BaseMonitor } from '../shared/IMonitor'
 import { logger } from '../shared/logger'
 import { buildCycleHeartbeat, machineContext } from '../shared/machineContext'
-import { AppType, getNormalizedRepoUrl } from '../shared/repositoryInfo'
+import { AppType, getNormalizedRepo } from '../shared/repositoryInfo'
 import {
   uploadContextFilesForSession,
   uploadCopilotRawRecords,
@@ -477,7 +477,7 @@ export class CopilotMonitor extends BaseMonitor {
 
     const addedLines = record.computeAddedLines()
     if (addedLines.length > 0 && record.event.isAccepted) {
-      const repositoryUrl = await getNormalizedRepoUrl(record.event.filePath)
+      const repo = await getNormalizedRepo(record.event.filePath)
       await uploadTracyRecords([
         {
           platform: InferencePlatform.Copilot,
@@ -486,7 +486,9 @@ export class CopilotMonitor extends BaseMonitor {
           editType: EditType.TabAutocomplete,
           additions: addedLines.join('\n'),
           filePath: record.event.filePath,
-          repositoryUrl: repositoryUrl ?? undefined,
+          repositoryUrl: repo?.gitRepoUrl ?? undefined,
+          branch: repo?.branch ?? null,
+          commitSha: repo?.commitSha ?? null,
           clientVersion: getConfig().extensionVersion,
         },
       ])

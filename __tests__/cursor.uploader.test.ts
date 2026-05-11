@@ -15,6 +15,8 @@ vi.mock('../src/shared/repositoryInfo', async (importOriginal) => {
     getNormalizedRepo: vi.fn().mockResolvedValue({
       gitRepoUrl: 'https://github.com/test-org/test-repo',
       gitRoot: '/tmp/test-repo',
+      branch: 'main',
+      commitSha: '0123456789abcdef0123456789abcdef01234567',
     }),
   }
 })

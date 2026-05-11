@@ -5,7 +5,7 @@ import {
 import { sanitizeData } from '../mobbdev_src/utils/sanitize-sensitive-data'
 import { getConfig } from '../shared/config'
 import { logger } from '../shared/logger'
-import { AppType, getNormalizedRepoUrl } from '../shared/repositoryInfo'
+import { AppType, getNormalizedRepo } from '../shared/repositoryInfo'
 import { uploadTracyRecords } from '../shared/uploader'
 import type { SegmentClassificationCode } from './types'
 
@@ -37,7 +37,7 @@ export async function uploadHumanChangesFromExtension(
 
   try {
     const config = getConfig()
-    const repositoryUrl = await getNormalizedRepoUrl(segment.uri)
+    const repo = await getNormalizedRepo(segment.uri)
     const trimmed = segment.changedLines.trim()
     const additions = config.sanitizeData
       ? String(await sanitizeData(trimmed))
@@ -51,7 +51,9 @@ export async function uploadHumanChangesFromExtension(
         editType: EditType.HumanEdit,
         additions,
         filePath: segment.relativePath || segment.fileName,
-        repositoryUrl: repositoryUrl ?? undefined,
+        repositoryUrl: repo?.gitRepoUrl ?? undefined,
+        branch: repo?.branch ?? null,
+        commitSha: repo?.commitSha ?? null,
         clientVersion: getConfig().extensionVersion,
       },
     ])

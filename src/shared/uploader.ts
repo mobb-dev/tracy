@@ -106,6 +106,8 @@ export async function uploadCursorRawRecords(
         recordTimestamp: bubble.createdAt ?? new Date().toISOString(),
         rawData: { bubble: record.bubble, metadata: serverMetadata },
         repositoryUrl: repo?.gitRepoUrl ?? undefined,
+        branch: repo?.branch ?? null,
+        commitSha: repo?.commitSha ?? null,
         clientVersion: config.extensionVersion,
       }
     })
@@ -222,6 +224,8 @@ export async function uploadCopilotRawRecords(
         recordTimestamp: new Date(record.request.timestamp).toISOString(),
         rawData,
         repositoryUrl: repo?.gitRepoUrl ?? undefined,
+        branch: repo?.branch ?? null,
+        commitSha: repo?.commitSha ?? null,
         clientVersion: config.extensionVersion,
       }
     })
@@ -418,6 +422,8 @@ export async function uploadContextFilesForSession(
       uploadFieldsJSON,
       keyPrefix,
       repositoryUrl: repo?.gitRepoUrl ?? undefined,
+      branch: repo?.branch ?? null,
+      commitSha: repo?.commitSha ?? null,
       clientVersion: config.extensionVersion,
       submitRecords: uploadTracyRecords,
       onFileError: (name, err) =>

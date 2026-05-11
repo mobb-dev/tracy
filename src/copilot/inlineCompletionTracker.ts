@@ -7,7 +7,7 @@ import {
 import { getConfig } from '../shared/config'
 import { fireWillAcceptInlineCompletion } from '../shared/inlineCompletionEvents'
 import { logger } from '../shared/logger'
-import { getNormalizedRepoUrl } from '../shared/repositoryInfo'
+import { getNormalizedRepo } from '../shared/repositoryInfo'
 import { uploadTracyRecords } from '../shared/uploader'
 
 // Tracks the stub disposable so it can be disposed when upgrading to full tracker
@@ -174,7 +174,7 @@ async function uploadCompletion(
   const filePath = fileUri.startsWith('file://')
     ? vscode.Uri.parse(fileUri).fsPath
     : undefined
-  const repositoryUrl = await getNormalizedRepoUrl(filePath)
+  const repo = await getNormalizedRepo(filePath)
 
   await uploadTracyRecords([
     {
@@ -184,7 +184,9 @@ async function uploadCompletion(
       editType: EditType.TabAutocomplete,
       additions,
       filePath,
-      repositoryUrl: repositoryUrl ?? undefined,
+      repositoryUrl: repo?.gitRepoUrl ?? undefined,
+      branch: repo?.branch ?? null,
+      commitSha: repo?.commitSha ?? null,
       clientVersion: getConfig().extensionVersion,
     },
   ])

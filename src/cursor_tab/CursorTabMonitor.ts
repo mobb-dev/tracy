@@ -12,7 +12,7 @@ import { getConfig } from '../shared/config'
 import { BaseMonitor } from '../shared/IMonitor'
 import { logger } from '../shared/logger'
 import { machineContext } from '../shared/machineContext'
-import { AppType, getNormalizedRepoUrl } from '../shared/repositoryInfo'
+import { AppType, getNormalizedRepo } from '../shared/repositoryInfo'
 import { uploadTracyRecords } from '../shared/uploader'
 import { AcceptanceTracker } from './AcceptanceTracker'
 
@@ -201,8 +201,8 @@ export class CursorTabMonitor extends BaseMonitor {
 
   private uploadAcceptedCompletion(additions: string): void {
     const filePath = this.activeEditorUri
-    getNormalizedRepoUrl(filePath)
-      .then((repositoryUrl) =>
+    getNormalizedRepo(filePath)
+      .then((repo) =>
         uploadTracyRecords([
           {
             platform: InferencePlatform.Cursor,
@@ -211,7 +211,9 @@ export class CursorTabMonitor extends BaseMonitor {
             editType: EditType.TabAutocomplete,
             additions,
             filePath,
-            repositoryUrl: repositoryUrl ?? undefined,
+            repositoryUrl: repo?.gitRepoUrl ?? undefined,
+            branch: repo?.branch ?? null,
+            commitSha: repo?.commitSha ?? null,
             clientVersion: getConfig().extensionVersion,
           },
         ])

@@ -217,6 +217,8 @@ vi.mock('../src/shared/repositoryInfo', async () => {
       {
         gitRepoUrl: 'https://github.com/test/repo.git',
         gitRoot: '/test/workspace',
+        branch: 'main',
+        commitSha: '0123456789abcdef0123456789abcdef01234567',
       },
     ],
     userEmail: 'test@example.com',
@@ -233,6 +235,12 @@ vi.mock('../src/shared/repositoryInfo', async () => {
       return mockRepoInfo
     }),
     getRepositoryInfo: vi.fn(async () => mockRepoInfo),
+    getNormalizedRepo: vi.fn().mockResolvedValue({
+      gitRepoUrl: 'https://github.com/test/repo',
+      gitRoot: '/ws',
+      branch: 'main',
+      commitSha: '0123456789abcdef0123456789abcdef01234567',
+    }),
     getNormalizedRepoUrl: vi
       .fn()
       .mockResolvedValue('https://github.com/test/repo'),

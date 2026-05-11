@@ -265,6 +265,36 @@ export type GitRepository = {
    * This may differ from the VS Code workspace folder when a subdirectory is opened.
    */
   gitRoot: string
+  /**
+   * Current branch name. `null` when the repository is in detached-HEAD state
+   * (rebase, bisect, "open this commit") — we never persist the literal string
+   * `"HEAD"` because it would pollute downstream attribution dashboards.
+   */
+  branch: string | null
+  /**
+   * Lowercase 40-hex HEAD commit SHA. `null` when unavailable (e.g. a freshly
+   * `git init`ed repo with no commits, or the vscode.git API hasn't populated
+   * `state.HEAD` yet).
+   */
+  commitSha: string | null
+}
+
+/**
+ * Read `{ branch, commitSha }` for a given repo root via the shared
+ * `GitService.getCurrentRepoState()` so detached-HEAD handling and SHA
+ * normalization stay in lockstep between this extension and the CLI daemon.
+ * Returns nulls on any failure (non-git dir, missing git, etc.).
+ */
+async function readHeadState(repoRoot: string): Promise<{
+  branch: string | null
+  commitSha: string | null
+}> {
+  try {
+    return await new GitService(repoRoot).getCurrentRepoState()
+  } catch (err) {
+    logger.warn({ err }, 'readHeadState failed')
+    return { branch: null, commitSha: null }
+  }
 }
 
 export type RepositoryInfo = {
@@ -400,7 +430,13 @@ export async function getWorkspaceGitRepositories(
       const gitUrl = await gitService.getRemoteUrl()
 
       if (gitUrl) {
-        results.push({ gitRoot, gitRepoUrl: gitUrl })
+        const head = await readHeadState(gitRoot)
+        results.push({
+          gitRoot,
+          gitRepoUrl: gitUrl,
+          branch: head.branch,
+          commitSha: head.commitSha,
+        })
         logger.info(`Found git repository at workspace root: ${gitRoot}`)
       } else {
         logger.warn('Git repository found but no remote URL available')
@@ -426,9 +462,13 @@ export async function getWorkspaceGitRepositories(
             if (repoIsGit) {
               const gitUrl = await repoGitService.getRemoteUrl()
               if (gitUrl) {
+                const root = canonicalizeRepoPath(repoPath)
+                const head = await readHeadState(root)
                 return {
-                  gitRoot: canonicalizeRepoPath(repoPath),
+                  gitRoot: root,
                   gitRepoUrl: gitUrl,
+                  branch: head.branch,
+                  commitSha: head.commitSha,
                 }
               }
               logger.warn(`Repository ${repoPath} has no remote URL, skipping`)
@@ -571,7 +611,13 @@ async function discoverRepoFromFilePath(
       return null
     }
 
-    const repo: GitRepository = { gitRoot, gitRepoUrl: gitUrl }
+    const head = await readHeadState(gitRoot)
+    const repo: GitRepository = {
+      gitRoot,
+      gitRepoUrl: gitUrl,
+      branch: head.branch,
+      commitSha: head.commitSha,
+    }
 
     // Add to in-memory list so future lookups don't need git CLI
     if (repoInfo) {
@@ -633,7 +679,16 @@ export async function getNormalizedRepo(
 
   const parsed = parseScmURL(repo.gitRepoUrl)
   if (parsed?.scmType && parsed.scmType !== 'Unknown') {
-    return repo
+    // Re-read branch/commitSha fresh on every call. The cached
+    // repoInfo.repositories array snapshots these at discovery time; we don't
+    // want stale branch/commit data persisting after a checkout. gitRoot and
+    // gitRepoUrl are stable per-repo so no rediscovery needed.
+    const head = await readHeadState(repo.gitRoot)
+    return {
+      ...repo,
+      branch: head.branch,
+      commitSha: head.commitSha,
+    }
   }
 
   return null

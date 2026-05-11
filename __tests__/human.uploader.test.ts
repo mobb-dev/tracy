@@ -13,6 +13,12 @@ vi.mock('../src/shared/repositoryInfo', async (importOriginal) => {
     await importOriginal<typeof import('../src/shared/repositoryInfo')>()
   return {
     ...actual,
+    getNormalizedRepo: vi.fn().mockResolvedValue({
+      gitRepoUrl: 'https://github.com/test-org/test-repo',
+      gitRoot: '/ws',
+      branch: 'main',
+      commitSha: '0123456789abcdef0123456789abcdef01234567',
+    }),
     getNormalizedRepoUrl: vi
       .fn()
       .mockResolvedValue('https://github.com/test-org/test-repo'),

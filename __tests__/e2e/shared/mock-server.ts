@@ -47,6 +47,10 @@ export type TracyRecord = {
   recordTimestamp: string
   clientVersion?: string
   repositoryUrl?: string
+  /** Git branch at sample time. `null` when detached HEAD or not in a git repo. */
+  branch?: string | null
+  /** Lowercase 40-hex HEAD commit SHA at sample time. `null` when not in a git repo. */
+  commitSha?: string | null
   computerName?: string
   userName?: string
   blameType?: string
