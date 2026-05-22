@@ -203,7 +203,11 @@ function ensureWorker(): boolean {
   }
 
   restartTimestamps.push(now)
-  logger.info('[db.ts] Restarting DB worker after unexpected exit')
+  // DEBUG, not INFO: this fires on every poll cycle because CursorMonitor
+  // recycles the worker at the end of each cycle (to reset the V8 heap and
+  // work around a node:sqlite native-memory leak). Genuine unexpected exits
+  // are logged at WARN by the worker's `exit` handler — see spawnWorker.
+  logger.debug('[db.ts] (Re)spawning DB worker for next poll cycle')
   spawnWorker(storedDbPath)
   return !!worker
 }

@@ -313,6 +313,8 @@ describe('Claude Code E2E — Multi-Turn Incremental Cursor', () => {
 
         const parsed = JSON.parse(s3Content!) as Record<string, unknown>
         expect(parsed.type).toBeTruthy()
+        // Known Claude Code transcript entry types — keep in sync with
+        // tscommon/.../claudeCodeParser.ts and claudeCodeTypes.ts.
         expect([
           'user',
           'assistant',
@@ -320,6 +322,14 @@ describe('Claude Code E2E — Multi-Turn Incremental Cursor', () => {
           'summary',
           'progress',
           'attachment',
+          // Session-metadata events:
+          'agent-name',
+          'agent-color',
+          'ai-title',
+          'custom-title',
+          'worktree-state',
+          'pr-link',
+          'permission-mode',
         ]).toContain(parsed.type)
       }
 
