@@ -22,6 +22,14 @@ export type CursorRawRecord = {
 type IncompleteBubble = {
   key: string
   firstSeenAt: number
+  /**
+   * Number of consecutive cycles this bubble has been re-queued because
+   * `attachResolvedContent` failed (e.g. SQLite contention with Cursor's
+   * writer). When this hits `MAX_RESOLVE_ATTEMPTS`, the caller ships the
+   * record without resolved content rather than blocking upload forever.
+   * Undefined / absent for bubbles re-queued for non-terminal tool status.
+   */
+  resolveAttempts?: number
 }
 
 type CursorValue = {
@@ -361,6 +369,21 @@ export function getIncompleteBubbleKeys(composerId: string): string[] {
   const cursorKey = getCursorKey(composerId)
   const cursor = configStore.get(cursorKey) as CursorValue | undefined
   return (cursor?.incompleteBubbles ?? []).map((b) => b.key)
+}
+
+/**
+ * Returns key → IncompleteBubble for the session's stored incomplete bubbles.
+ * Callers re-queueing previously-failed bubbles use this to preserve
+ * `firstSeenAt` (so STALE_KEY_MAX_AGE_MS eviction can still fire on
+ * pathological rows) and to read `resolveAttempts` (so they can decide
+ * whether to ship the record instead of re-queueing yet again).
+ */
+export function getIncompleteBubbleMap(
+  composerId: string
+): Map<string, IncompleteBubble> {
+  const cursorKey = getCursorKey(composerId)
+  const cursor = configStore.get(cursorKey) as CursorValue | undefined
+  return new Map((cursor?.incompleteBubbles ?? []).map((b) => [b.key, b]))
 }
 
 export type AdvanceCursorOptions = {

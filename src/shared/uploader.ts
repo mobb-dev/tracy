@@ -69,7 +69,10 @@ export async function uploadTracyRecords(
  */
 export async function uploadCursorRawRecords(
   records: CursorRawRecord[],
-  incompleteBubbles?: Map<string, { key: string; firstSeenAt: number }[]>,
+  incompleteBubbles?: Map<
+    string,
+    { key: string; firstSeenAt: number; resolveAttempts?: number }[]
+  >,
   maxRowIds?: Map<string, number>,
   bubblesLimit?: number
 ): Promise<{ uploaded: number }> {

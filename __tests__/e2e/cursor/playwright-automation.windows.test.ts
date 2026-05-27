@@ -11,6 +11,7 @@
  * - Windows-specific shell commands
  */
 
+import { execSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -39,8 +40,143 @@ import {
 // Test configuration - increased timeouts for Windows
 const TEST_TIMEOUT = 360000 // 6 minutes (Windows is slower)
 const AI_RESPONSE_TIMEOUT = 90000 // 90 seconds for AI to respond
-const UPLOAD_WAIT_TIMEOUT = 60000 // 60 seconds for upload
+// 90s = ~4.5x the extension's 20s poll interval on the slowest Windows runners.
+// 60s previously gave only ~3 poll cycles of slack and tripped on cold-start GH runners.
+const UPLOAD_WAIT_TIMEOUT = 90000
 const EXTENSION_POLL_INTERVAL = 5000
+
+/**
+ * Debug-only screenshot that never throws. The Windows runner sometimes can't
+ * paint Cursor's window fast enough for Playwright's 30s screenshot budget; a
+ * failed screenshot would abort the test before any actual assertion ran.
+ * Screenshots are diagnostic artifacts, not assertions.
+ */
+async function safeScreenshot(window: Page, file: string): Promise<void> {
+  try {
+    await window.screenshot({ path: file, timeout: 10000 })
+  } catch (err) {
+    console.log(`  (screenshot skipped: ${file} — ${(err as Error).message.split('\n')[0]})`)
+  }
+}
+
+/**
+ * Read the extension's _e2e-activation-trace.jsonl (written when env var
+ * MOBB_E2E_ACTIVATION_TRACE=1). Dumps every event to stdout so the CI log
+ * tells us exactly where activation stalled / failed.
+ *
+ * The trace path mirrors `context.globalStorageUri.fsPath` —
+ * `{profile}/User/globalStorage/Mobb.mobb-ai-tracer/_e2e-activation-trace.jsonl`.
+ */
+function dumpActivationTrace(profileDir: string): void {
+  // Try the env-var-driven backup path first — it's the source of truth for
+  // "did activate() run at all" since it doesn't depend on globalStorageUri.
+  const backupPath = path.join(profileDir, '_activation-trace.jsonl')
+  const gsPath = path.join(
+    profileDir,
+    'User',
+    'globalStorage',
+    'Mobb.mobb-ai-tracer',
+    '_e2e-activation-trace.jsonl'
+  )
+  console.log('')
+  console.log('  ┌─ Extension Activation Trace ─────────────────')
+
+  const sources: Array<{ label: string; file: string }> = [
+    { label: 'backup (env-var path)', file: backupPath },
+    { label: 'globalStorageUri path', file: gsPath },
+  ]
+  let foundAny = false
+  for (const src of sources) {
+    if (!fs.existsSync(src.file)) {
+      console.log(`  │ [${src.label}] no file at ${src.file}`)
+      continue
+    }
+    foundAny = true
+    console.log(`  │ [${src.label}] ${src.file}`)
+    try {
+      const lines = fs.readFileSync(src.file, 'utf8').trim().split('\n')
+      for (const line of lines) {
+        console.log(`  │   ${line}`)
+      }
+    } catch (err) {
+      console.log(`  │   (failed to read: ${(err as Error).message})`)
+    }
+  }
+  if (!foundAny) {
+    console.log(`  │ → both locations empty: activate() never ran on this Cursor+Windows process`)
+  }
+  console.log('  └──────────────────────────────────────────────')
+
+  // Also dump anything Cursor logged about extensions — tells us whether
+  // Cursor even saw the extension directory and tried to load the manifest.
+  dumpCursorExtensionLogs(profileDir)
+}
+
+/**
+ * Walk Cursor's log directory and dump any line mentioning the extension
+ * name. Cursor writes to `{profile}/logs/<timestamp>/exthost*.log` and
+ * `main.log` — these surface extension load / activation errors that the
+ * test's mock server can't see.
+ */
+function dumpCursorExtensionLogs(profileDir: string): void {
+  const logsRoot = path.join(profileDir, 'logs')
+  console.log('')
+  console.log('  ┌─ Cursor Logs (extension-related lines) ──────')
+  if (!fs.existsSync(logsRoot)) {
+    console.log(`  │ (no logs dir at ${logsRoot})`)
+    console.log('  └──────────────────────────────────────────────')
+    return
+  }
+  try {
+    const sessions = fs.readdirSync(logsRoot).sort()
+    let lines = 0
+    for (const session of sessions) {
+      const sessionDir = path.join(logsRoot, session)
+      if (!fs.statSync(sessionDir).isDirectory()) continue
+      const files = fs.readdirSync(sessionDir)
+      for (const file of files) {
+        if (!file.endsWith('.log')) continue
+        const filePath = path.join(sessionDir, file)
+        const content = fs.readFileSync(filePath, 'utf8')
+        // Two passes: targeted (extension-specific) then broad (errors /
+        // warnings). The broad pass catches cases where Cursor logs about
+        // the extension dir without mentioning our identifier — e.g.
+        // "Cannot find manifest", "Skipping extension", "ENOENT".
+        const targeted = content
+          .split(/\r?\n/)
+          .filter((l) =>
+            /mobb-ai-tracer|Mobb\.mobb-ai-tracer|onStartupFinished|extension.*activat/i.test(
+              l
+            )
+          )
+        const broad = content
+          .split(/\r?\n/)
+          .filter((l) =>
+            /\[error\]|\[warn\]|extensions.json|Failed to|Cannot find|Skipping extension|ENOENT|manifest/i.test(
+              l
+            )
+          )
+        const combined = [...targeted, ...broad].slice(0, 30)
+        if (combined.length > 0) {
+          console.log(`  │ [${session}/${file}]`)
+          for (const m of combined) {
+            console.log(`  │   ${m}`)
+            lines++
+            if (lines >= 120) break
+          }
+          if (lines >= 120) break
+        }
+      }
+      if (lines >= 120) break
+    }
+    if (lines === 0) {
+      console.log('  │ (no extension/error lines in any Cursor log — Cursor may not be scanning extensions dir)')
+    }
+  } catch (err) {
+    console.log(`  │ (failed to read Cursor logs: ${(err as Error).message})`)
+  }
+  console.log('  └──────────────────────────────────────────────')
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Windows-specific Cursor Helpers
@@ -79,6 +215,63 @@ function getCursorExecutablePathWindows(): string {
   throw new Error(
     'Cursor not found on Windows. Set CURSOR_PATH environment variable or install Cursor.'
   )
+}
+
+/**
+ * Resolve the Cursor CLI wrapper next to `Cursor.exe`. Cursor (like VS
+ * Code) ships a `cursor.cmd` shim that sets `ELECTRON_RUN_AS_NODE=1` and
+ * exits cleanly after CLI commands. Without the shim, invoking
+ * `Cursor.exe --install-extension` on Windows launches the full Electron
+ * GUI: the install completes, but the process keeps running (welcome
+ * screen, McpProcess retries, etc.) and `execSync` hangs until its
+ * timeout fires.
+ *
+ * Returns the shim path when found, or `null` when neither candidate
+ * exists — the caller should then fall back to direct VSIX extraction
+ * instead of executing `Cursor.exe` and waiting for it to never exit.
+ */
+function getCursorCliWrapperPathWindows(exePath: string): string | null {
+  const exeDir = path.dirname(exePath)
+  // VS Code convention places the shim in two locations; check both.
+  const candidates = [
+    path.join(exeDir, 'bin', 'cursor.cmd'),
+    path.join(exeDir, 'resources', 'app', 'bin', 'cursor.cmd'),
+    path.join(exeDir, 'bin', 'cursor'),
+    path.join(exeDir, 'resources', 'app', 'bin', 'cursor'),
+  ]
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      console.log(`  Found Cursor CLI shim: ${candidate}`)
+      return candidate
+    }
+  }
+  console.log(`  Cursor CLI shim not found near ${exeDir}`)
+  return null
+}
+
+/**
+ * Force-kill any stray Cursor.exe processes left over from a previous
+ * test attempt. A hung CLI install or crashed Electron app leaves Cursor
+ * running, which then holds Cache file locks (EBUSY on `journal.baj`)
+ * and the install mutex (`Error: Error mutex already exists`) — both
+ * observed on the failing GH Windows runner. Calling this at the top of
+ * `beforeEach` makes the test self-healing across Playwright retries.
+ *
+ * Best-effort: `taskkill` exits non-zero when no matching process
+ * exists, which is the normal case on the first attempt. Swallow it.
+ */
+function killStrayCursorProcessesWindows(): void {
+  if (process.platform !== 'win32') return
+  try {
+    execSync('taskkill /F /IM Cursor.exe /T', {
+      // Suppress "not found" stderr so the no-op case stays quiet.
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 15_000,
+    })
+    console.log('  Killed stray Cursor.exe processes')
+  } catch {
+    // No matching process — expected on the first attempt.
+  }
 }
 
 // Git-init helper moved to `../shared/vscode-test-helpers.ts` (initTestGitRepo).
@@ -309,6 +502,11 @@ test.describe('Cursor Extension E2E (Windows)', () => {
     test.setTimeout(TEST_TIMEOUT)
     tracker.logTimestamp('Test setup starting')
 
+    // Belt-and-braces against Playwright retries: a previous attempt
+    // may have left a Cursor.exe behind holding Cache locks + install
+    // mutex. Kill it before we touch anything.
+    killStrayCursorProcessesWindows()
+
     const tempBase = getWindowsTempBase()
     testProfileDir = path.join(
       tempBase,
@@ -385,11 +583,71 @@ test.describe('Cursor Extension E2E (Windows)', () => {
     const extensionsDir = path.join(testProfileDir, 'User', 'extensions')
     fs.mkdirSync(extensionsDir, { recursive: true })
 
-    extractVSIX(vsixPath, extensionsDir, {
-      readMetadata: true,
-      verifyFiles: ['package.json', 'out/extension.js'],
-      verbose: true,
-    })
+    // Install via Cursor's own CLI. This lets Cursor manage the
+    // `extensions.json` manifest itself, which means the bundled
+    // remote-wsl / remote-ssh extensions Cursor installs on first launch
+    // *merge* with our entry instead of clobbering it. Diagnostic on
+    // commit 645711c94 confirmed the direct-extraction path failed
+    // because Cursor's first-launch bundled-extension install wiped any
+    // manifest we wrote manually. Running via Cursor's CLI also produces
+    // any auxiliary metadata files (`.obsolete`, signatures) the loader
+    // checks for.
+    //
+    // Use the `cursor.cmd` shim — never `Cursor.exe` directly. Direct
+    // `Cursor.exe --install-extension` on Windows launches the full
+    // Electron GUI (welcome screen, McpProcess startup, etc.) and never
+    // exits, so `execSync` hangs until the 5-min timeout fires and the
+    // 600s test-suite timeout kills the whole job. The shim sets
+    // `ELECTRON_RUN_AS_NODE=1` so the same flags run headless and the
+    // process exits when the install completes. If the shim isn't
+    // findable next to `Cursor.exe`, skip the CLI path entirely and
+    // fall back to direct extraction — running `Cursor.exe` would only
+    // re-hang.
+    const cursorPathForInstall = getCursorExecutablePathWindows()
+    const cursorCliShim = getCursorCliWrapperPathWindows(cursorPathForInstall)
+    const cursorInstallEnv = {
+      ...process.env,
+      MOBB_E2E_ACTIVATION_TRACE: undefined,
+      MOBB_E2E_ACTIVATION_TRACE_PATH: undefined,
+    }
+    if (cursorCliShim) {
+      console.log(`  Installing extension via Cursor CLI shim: ${vsixPath}`)
+      console.log(`    Using shim: ${cursorCliShim}`)
+      try {
+        execSync(
+          `"${cursorCliShim}" --user-data-dir="${testProfileDir}" --extensions-dir="${extensionsDir}" --install-extension "${vsixPath}" --force`,
+          {
+            stdio: 'inherit',
+            env: cursorInstallEnv,
+            // Generous 5-min cap covers Cursor's first-launch init
+            // (bundled remote-wsl + remote-ssh) plus our VSIX. With the
+            // shim the process exits when done, so this is a true
+            // upper bound, not a hang-detector.
+            timeout: 300_000,
+            // .cmd shims require shell expansion on Windows.
+            shell: process.platform === 'win32' ? true : false,
+          }
+        )
+        console.log('  ✅ Extension installed via Cursor CLI shim')
+      } catch (err) {
+        console.log(
+          `  ⚠️ Cursor CLI shim install failed: ${(err as Error).message.split('\n')[0]}`
+        )
+        console.log('  Falling back to direct extraction...')
+        extractVSIX(vsixPath, extensionsDir, {
+          readMetadata: true,
+          verifyFiles: ['package.json', 'out/extension.js'],
+          verbose: true,
+        })
+      }
+    } else {
+      console.log('  No Cursor CLI shim available; using direct VSIX extraction')
+      extractVSIX(vsixPath, extensionsDir, {
+        readMetadata: true,
+        verifyFiles: ['package.json', 'out/extension.js'],
+        verbose: true,
+      })
+    }
 
     // Verify extension installation
     const extDirs = fs.readdirSync(extensionsDir).filter((d) =>
@@ -492,6 +750,16 @@ test.describe('Cursor Extension E2E (Windows)', () => {
         '--no-sandbox',
         '--disable-dev-shm-usage',
         '--disable-gpu',
+        // Suppress first-run UI that can block `onStartupFinished` from
+        // firing. Hypothesis: Cursor on Windows sometimes shows a welcome
+        // / sign-in / workspace-trust modal that gates extension activation.
+        // Without these, the extension's `activate()` may never run, which
+        // matches the observed "0 requests" failure mode (confirmed via
+        // diagnostic trace in commit 86b8b732c).
+        '--skip-welcome',
+        '--skip-release-notes',
+        '--disable-workspace-trust',
+        '--disable-telemetry',
         `--folder-uri=${workspaceFolderUri}`,
       ],
       env: {
@@ -502,6 +770,16 @@ test.describe('Cursor Extension E2E (Windows)', () => {
         NODE_ENV: 'test',
         CURSOR_TRACE_ID: undefined,
         CURSOR_SESSION_ID: undefined,
+        // Opt-in diagnostic — when set, the extension writes activation
+        // events to {globalStorage}/_e2e-activation-trace.jsonl. The test
+        // dumps that file on failure so we can see where activation stalled.
+        MOBB_E2E_ACTIVATION_TRACE: '1',
+        // Also write a backup copy to this absolute path. Distinguishes
+        // "activate() never ran" from "globalStorageUri resolved elsewhere".
+        MOBB_E2E_ACTIVATION_TRACE_PATH: path.join(
+          testProfileDir,
+          '_activation-trace.jsonl'
+        ),
       },
       timeout: 90000,
     })
@@ -513,7 +791,7 @@ test.describe('Cursor Extension E2E (Windows)', () => {
     await mainWindow.waitForLoadState('domcontentloaded')
     tracker.logTimestamp('Cursor window loaded')
     tracker.mark('Cursor Launched')
-    await mainWindow.screenshot({ path: 'test-results/01-cursor-loaded-win.png' })
+    await safeScreenshot(mainWindow, 'test-results/01-cursor-loaded-win.png')
 
     // Wait for workbench
     try {
@@ -523,7 +801,7 @@ test.describe('Cursor Extension E2E (Windows)', () => {
       console.log('  Could not detect monaco-workbench, continuing...')
       await mainWindow.waitForTimeout(5000)
     }
-    await mainWindow.screenshot({ path: 'test-results/02-cursor-ready-win.png' })
+    await safeScreenshot(mainWindow, 'test-results/02-cursor-ready-win.png')
 
     // Wait for extension activation
     console.log('  Waiting for extension activation...')
@@ -550,25 +828,25 @@ test.describe('Cursor Extension E2E (Windows)', () => {
       expect(totalRequests).toBeGreaterThan(0)
       console.log(`  Extension made ${totalRequests} requests - infrastructure working!`)
 
-      await mainWindow.screenshot({ path: 'test-results/win-no-auth-validation.png' })
+      await safeScreenshot(mainWindow, 'test-results/win-no-auth-validation.png')
       tracker.logTimestamp('Infrastructure validation complete (no auth)')
       return
     }
 
     // Send AI prompt
     await dismissDialogsWindows(mainWindow)
-    await mainWindow.screenshot({ path: 'test-results/03-dialogs-dismissed-win.png' })
+    await safeScreenshot(mainWindow, 'test-results/03-dialogs-dismissed-win.png')
 
     const inputFocused = await openAgentPanelWindows(mainWindow)
     console.log(`  Agent panel opened, input focused: ${inputFocused}`)
-    await mainWindow.screenshot({ path: 'test-results/04-agent-panel-win.png' })
+    await safeScreenshot(mainWindow, 'test-results/04-agent-panel-win.png')
 
     const uniqueId = Date.now()
     const prompt = `Create a new file called utils-${uniqueId}.js with a simple add function that adds two numbers`
 
     await typeAndSubmitPromptWindows(mainWindow, prompt)
     tracker.mark('AI Prompt Sent')
-    await mainWindow.screenshot({ path: 'test-results/05-prompt-sent-win.png' })
+    await safeScreenshot(mainWindow, 'test-results/05-prompt-sent-win.png')
 
     // Wait for generation
     await mainWindow.waitForTimeout(5000)
@@ -577,7 +855,7 @@ test.describe('Cursor Extension E2E (Windows)', () => {
     if (codeGenerated) {
       tracker.mark('Code Generated')
     }
-    await mainWindow.screenshot({ path: 'test-results/06-generation-complete-win.png' })
+    await safeScreenshot(mainWindow, 'test-results/06-generation-complete-win.png')
 
     // Wait for tracy records
     console.log('')
@@ -593,10 +871,16 @@ test.describe('Cursor Extension E2E (Windows)', () => {
       tracker.mark('Tracy Records Uploaded')
     } catch (err) {
       console.log(`  Tracy record wait failed: ${err}`)
-      await mainWindow.screenshot({ path: 'test-results/error-upload-timeout-win.png' })
+      await safeScreenshot(mainWindow, 'test-results/error-upload-timeout-win.png')
 
       // Log debug info
       console.log(`  Request log: ${JSON.stringify(mockServer.getRequestLog(), null, 2)}`)
+
+      // Dump the extension's activation trace if MOBB_E2E_ACTIVATION_TRACE
+      // was enabled. Tells us *where* activation stalled / failed — the
+      // alternative is staring at "0 requests" with no idea why.
+      dumpActivationTrace(testProfileDir)
+
       throw err
     }
 

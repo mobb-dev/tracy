@@ -455,6 +455,33 @@ export async function prefetchSessions(
 }
 
 /**
+ * Resolve `composer.content.<sha256>` rows by exact key in a single batched
+ * round-trip. Used by `attachResolvedContent` to inline the edit content for
+ * `edit_file_v2` bubbles whose `result` references content-by-reference.
+ *
+ * **Throws** if the worker is unavailable. `attachResolvedContent`'s catch
+ * branch handles this by re-queuing the affected records for next-cycle
+ * retry — silently returning `{}` would look identical to "all rows
+ * missing" and let the cursor advance past the bubbles, permanently
+ * losing attribution. See T-516 review Finding 11.
+ */
+export async function fetchComposerContent(
+  keys: string[]
+): Promise<Record<string, string>> {
+  if (keys.length === 0) {
+    return {}
+  }
+  if (!worker && !ensureWorker()) {
+    logger.warn(
+      { keysRequested: keys.length },
+      '[db.ts] Worker unavailable for fetchComposerContent — throwing so caller can re-queue records'
+    )
+    throw new Error('DB worker unavailable for fetchComposerContent')
+  }
+  return workerRequest<Record<string, string>>('fetchComposerContent', { keys })
+}
+
+/**
  * Returns perf data from the most recent worker response.
  * Consumed once — returns null on subsequent calls until a new response arrives.
  */

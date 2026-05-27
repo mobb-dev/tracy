@@ -202,6 +202,11 @@ vi.mock('../src/cursor/db', () => ({
   prefetchSessions: (
     sessions: { composerId: string; afterTimestamp?: string }[]
   ) => prefetchSessionsMock(sessions),
+  // No content-by-reference resolution path in these synthetic-bubble
+  // tests — fixtures don't carry result.afterContentId, so the helper
+  // short-circuits before reaching the worker. Stub returns {} for safety.
+  fetchComposerContent: vi.fn(async () => ({})),
+  isWorkerAvailable: vi.fn(() => true),
   consumeWorkerPerf: vi.fn(() => null),
   recycleWorker: vi.fn(async () => undefined),
 }))

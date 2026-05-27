@@ -314,7 +314,10 @@ describe('Claude Code E2E — Multi-Turn Incremental Cursor', () => {
         const parsed = JSON.parse(s3Content!) as Record<string, unknown>
         expect(parsed.type).toBeTruthy()
         // Known Claude Code transcript entry types — keep in sync with
-        // tscommon/.../claudeCodeParser.ts and claudeCodeTypes.ts.
+        // tscommon/.../claudeCodeParser.ts `KNOWN_EVENT_TYPES` and
+        // claudeCodeTypes.ts. If a new top-level type appears here we WANT
+        // this assertion to fail so the parser side gets a matching entry
+        // too, instead of silently uploading unrecognized rows.
         expect([
           'user',
           'assistant',

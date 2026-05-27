@@ -1,3 +1,6 @@
+import * as fs from 'node:fs'
+import * as path from 'node:path'
+
 import * as vscode from 'vscode'
 
 import {
@@ -43,7 +46,68 @@ const DB_RETRY_COOLDOWN_MS = 30 * 60 * 1000 // 30 minutes
 const MAX_DB_RETRIES = 5 // stop after 2.5 hours
 let dbRetryCount = 0
 
+/**
+ * Diagnostic-only activation trace. Writes one JSON line per stage to a file
+ * the E2E test reads to figure out where activation stalled / failed. Opt-in
+ * via `MOBB_E2E_ACTIVATION_TRACE=1` so it's a no-op in production.
+ *
+ * Never throws — diagnostics must not affect activation. The path is
+ * derived from `context.globalStorageUri.fsPath`, which the test knows.
+ */
+function writeActivationTrace(
+  context: vscode.ExtensionContext,
+  stage: string,
+  info: Record<string, unknown> = {}
+): void {
+  if (process.env.MOBB_E2E_ACTIVATION_TRACE !== '1') {
+    return
+  }
+  const line = `${JSON.stringify(
+    {
+      ts: Date.now(),
+      stage,
+      gs: context.globalStorageUri.fsPath,
+      ...info,
+    },
+    replacer
+  )}\n`
+  // 1) globalStorageUri-relative — what the extension *thinks* its storage is.
+  try {
+    const dir = context.globalStorageUri.fsPath
+    fs.mkdirSync(dir, { recursive: true })
+    fs.appendFileSync(path.join(dir, '_e2e-activation-trace.jsonl'), line)
+  } catch {
+    // Diagnostic only — swallow.
+  }
+  // 2) Backup at an absolute path passed via env var. Lets the test find the
+  //    trace even if globalStorageUri resolves somewhere unexpected, which is
+  //    the working theory for the Cursor+Windows "no trace file" failure.
+  const backupPath = process.env.MOBB_E2E_ACTIVATION_TRACE_PATH
+  if (backupPath) {
+    try {
+      fs.mkdirSync(path.dirname(backupPath), { recursive: true })
+      fs.appendFileSync(backupPath, line)
+    } catch {
+      // Swallow.
+    }
+  }
+}
+
+function replacer(_key: string, value: unknown): unknown {
+  if (value instanceof Error) {
+    return { name: value.name, message: value.message, stack: value.stack }
+  }
+  return value
+}
+
 export async function activate(context: vscode.ExtensionContext) {
+  writeActivationTrace(context, 'activate:start', {
+    extensionPath: context.extensionPath,
+    appName: vscode.env.appName,
+    nodeVersion: process.version,
+    platform: process.platform,
+  })
+
   // Initialize configuration from THIS extension's package.json
   // Each extension has its own extensionPath, so dev and prod get different configs
   initConfig(context.extensionPath)
@@ -54,6 +118,14 @@ export async function activate(context: vscode.ExtensionContext) {
 
   const { apiUrl, webAppUrl, isDevExtension } = config
   const isLocalEnv = apiUrl.includes('localhost')
+
+  writeActivationTrace(context, 'config:loaded', {
+    apiUrl,
+    webAppUrl,
+    isLocalEnv,
+    isDevExtension,
+    isConfigFromPackageJson: config.isConfigFromPackageJson,
+  })
 
   logger.info(
     { apiUrl, webAppUrl, isLocalEnv, isDevExtension },
@@ -70,12 +142,18 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Get authenticated before starting monitoring
     await getAuthenticated(context, webAppUrl, apiUrl)
+    writeActivationTrace(context, 'auth:done')
 
     // Initialize repository info, needs to be done after auth but before monitoring
     await initRepoInfo()
     if (!repoInfo) {
       throw new Error('Failed to get repository info')
     }
+    writeActivationTrace(context, 'repoInfo:done', {
+      appType: repoInfo.appType,
+      ideVersion: repoInfo.ideVersion,
+      repoCount: repoInfo.repositories.length,
+    })
     logger.info(`Repository info: ${JSON.stringify(repoInfo)}`)
 
     // Enrich DDtags with platform/environment info now that repoInfo is available
@@ -95,8 +173,10 @@ export async function activate(context: vscode.ExtensionContext) {
     if (repoInfo.appType === AppType.CURSOR) {
       try {
         await initDB(context)
+        writeActivationTrace(context, 'initDB:done')
       } catch (dbErr) {
         dbInitFailed = true
+        writeActivationTrace(context, 'initDB:failed', { err: dbErr })
         logger.error(
           { err: dbErr },
           'Failed to initialize Cursor DB — CursorMonitor will not start. Scheduling retry.'
@@ -110,6 +190,9 @@ export async function activate(context: vscode.ExtensionContext) {
     await monitorManager.startMonitoring(
       dbInitFailed ? ['CursorMonitor'] : undefined
     )
+    writeActivationTrace(context, 'monitoring:started', {
+      skippedCursorMonitor: dbInitFailed,
+    })
 
     // Track Copilot inline completion acceptances (VS Code only — Cursor has its own tab tracking)
     if (repoInfo.appType === AppType.VSCODE) {
@@ -166,7 +249,9 @@ export async function activate(context: vscode.ExtensionContext) {
       )
     }
     logger.info('Extension activated successfully')
+    writeActivationTrace(context, 'activate:success')
   } catch (err) {
+    writeActivationTrace(context, 'activate:failed', { err })
     // Log at error level so the problem is visible in Datadog and extension output,
     // but do NOT re-throw — we must never crash the extension host.
     const errMsg = err instanceof Error ? err.message : String(err)

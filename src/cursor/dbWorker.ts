@@ -292,6 +292,76 @@ function fetchBubbles(
 }
 
 /**
+ * Per-row byte cap on resolved `composer.content` rows. Mirrors the
+ * `MAX_CONTENT_BYTES` constant in `resolveContent.ts`; defined here too so
+ * the worker can drop oversize rows at the SQL level before they cross the
+ * worker boundary. Worker and resolver caps stay in sync by convention —
+ * if they ever diverge, the smaller wins and the larger callsite is dead
+ * code (safe failure mode). See T-516 review Finding 6.
+ */
+const MAX_RESOLVED_CONTENT_BYTES = 20 * 1024 * 1024
+
+/**
+ * Batch-fetch `composer.content.<sha256>` rows by exact key.
+ *
+ * Why this exists: since 2026-04-30 Cursor's `edit_file_v2` bubbles store
+ * their edit content out-of-band — `bubble.toolFormerData.result` carries
+ * `beforeContentId` / `afterContentId` strings that point at separate
+ * `composer.content.<sha256>` rows in `cursorDiskKV`. The backend parser
+ * still expects inline content, so we resolve those references on the
+ * extension side before upload (see `resolveContent.ts`).
+ *
+ * Contract:
+ *  - Caller passes a flat array of `composer.content.<sha256>` keys.
+ *    Tolerates duplicates (returned Record naturally deduplicates by key);
+ *    caller should still pre-dedupe via Set for SQL parameter efficiency.
+ *  - Returns a `Record<key, value>` containing only keys that resolved AND
+ *    that fit under `MAX_RESOLVED_CONTENT_BYTES` (filtered SQL-side via
+ *    `octet_length(value) <= ?` so oversize rows never cross the worker
+ *    boundary).
+ *  - Chunks at `MAX_IN_PARAMS` to stay under SQLite's `IN(...)` limit;
+ *    within one call the prepared statement is reused per distinct chunk
+ *    size (full vs trailing-partial chunk).
+ *  - No `ORDER BY` / `LIMIT` — we want every matching row, not a window.
+ */
+function fetchComposerContent(keys: string[]): Record<string, string> {
+  if (keys.length === 0) {
+    return {}
+  }
+  return execute((conn) => {
+    // Cache prepared statements by placeholder count within a single call.
+    // Mirrors the in-call `inStmtCache` pattern used by `prefetchSessions` /
+    // `getInClauseStmt`. With a single full chunk + one trailing partial
+    // chunk, this caps at 2 distinct prepares per call.
+    const stmtCache = new Map<number, PreparedStatement>()
+    const result: Record<string, string> = {}
+    for (let i = 0; i < keys.length; i += MAX_IN_PARAMS) {
+      const chunk = keys.slice(i, i + MAX_IN_PARAMS)
+      let stmt = stmtCache.get(chunk.length)
+      if (!stmt) {
+        const placeholders = new Array(chunk.length).fill('?').join(',')
+        stmt = conn.prepare(
+          // `octet_length` filters by UTF-8 byte length — keeps oversize
+          // rows out of the worker payload and main-thread heap.
+          `SELECT key, value FROM cursorDiskKV WHERE key IN (${placeholders}) AND octet_length(value) <= ?`
+        )
+        stmtCache.set(chunk.length, stmt)
+      }
+      const rows = stmt.all(...chunk, MAX_RESOLVED_CONTENT_BYTES) as Array<{
+        key: string
+        value: string
+      }>
+      for (const row of rows) {
+        if (typeof row.value === 'string') {
+          result[row.key] = row.value
+        }
+      }
+    }
+    return result
+  })
+}
+
+/**
  * Batch-fetch bubbles + composerData for multiple sessions in a single
  * connection open/close cycle. Reduces lock acquisition from 2×N to 1.
  * Uses rowid for filtering — pure B-tree scan, no JSON parsing in SQL.
@@ -383,6 +453,12 @@ parentPort?.on('message', (msg: WorkerRequest) => {
           0
         )
         result = sessions
+        break
+      }
+      case 'fetchComposerContent': {
+        const map = fetchComposerContent(params.keys as string[])
+        rowsReturned = Object.keys(map).length
+        result = map
         break
       }
       case 'close':

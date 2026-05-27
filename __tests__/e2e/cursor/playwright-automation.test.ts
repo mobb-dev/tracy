@@ -103,6 +103,31 @@ function assertTracyRecordShape(record: TracyRecord, server: MockUploadServer): 
   // model should be resolved from composerData
   expect(rawData.metadata.model).toBeTruthy()
   expect(typeof rawData.metadata.model).toBe('string')
+
+  // Regression guard for the 2026-04-30 Cursor content-by-reference change:
+  // any uploaded edit_file_v2 bubble whose `result` references content
+  // out-of-band (via afterContentId) MUST carry the resolved content inline
+  // on `toolFormerData.resolvedContent.after`. Without this assertion, a
+  // re-introduction of the extension-side regression would silently strip
+  // attributions for every Cursor edit again.
+  const tfd = rawData.bubble.toolFormerData as
+    | {
+        name?: string
+        result?: string
+        resolvedContent?: { after?: string }
+      }
+    | undefined
+  if (
+    tfd?.name === 'edit_file_v2' &&
+    typeof tfd.result === 'string' &&
+    tfd.result.includes('afterContentId')
+  ) {
+    expect(
+      tfd.resolvedContent?.after,
+      'edit_file_v2 bubble with afterContentId must carry resolvedContent.after — the tracer extension stopped resolving composer.content.<sha256> rows'
+    ).toEqual(expect.any(String))
+    expect(tfd.resolvedContent!.after!.length).toBeGreaterThan(0)
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
