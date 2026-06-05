@@ -1,50 +1,110 @@
 /**
- * Create VS Code state.vscdb with GitHub OAuth token
+ * Create VS Code state.vscdb with a GitHub OAuth session.
  *
- * This helper creates a SQLite database in the format VS Code uses
- * for storing authentication state, allowing us to inject OAuth tokens
- * obtained via Device Flow.
+ * Modern VS Code (≥1.123) reads the GitHub auth session from its **secret
+ * store**, not the legacy plaintext `github.auth.sessions` ItemTable key:
  *
- * VS Code stores GitHub auth in state.vscdb under the key:
- * - github.auth.sessions (for GitHub authentication)
+ *   secret://{"extensionId":"vscode.github-authentication","key":"github.auth"}
  *
- * The value is a JSON object mapping session IDs to session data.
+ * When VS Code is launched with `--password-store=basic`, that secret value is
+ * the Electron/Chromium "basic" (v10) AES-128-CBC blob, stored in ItemTable as
+ * a `{"type":"Buffer","data":[…]}` JSON. We reproduce exactly that so an
+ * injected Device-Flow token actually authenticates Copilot — independent of
+ * VS Code version and with no captured-DB dependency.
  */
+
+import * as crypto from 'crypto'
 
 import Database from 'better-sqlite3'
 import * as fs from 'fs'
 import * as path from 'path'
 
-// GitHub OAuth scopes for Copilot
-const COPILOT_SCOPES = ['read:user', 'user:email', 'copilot']
+// GitHub OAuth scopes the session declares. VS Code's github-authentication
+// provider returns a stored session to a consumer (Copilot, core) only when the
+// session's scopes satisfy the requested scope set, so these MUST match what
+// VS Code itself requests on a real sign-in. Verified against a known-good
+// captured session (auth/vscode-auth-linux.b64): the working set is
+// read:user / user:email / repo / workflow — NOT a "copilot" scope (which VS
+// Code never requests, so a session declaring it is never matched → "Got 0
+// sessions"). Keep in sync with OAUTH_SCOPES in device-code-api.ts.
+const COPILOT_SCOPES = ['read:user', 'user:email', 'repo', 'workflow']
+
+// Secret-store key VS Code's github-authentication provider reads sessions from.
+const GITHUB_SESSION_SECRET_KEY =
+  'secret://{"extensionId":"vscode.github-authentication","key":"github.auth"}'
 
 type GitHubSession = {
   id: string
   accessToken: string
-  account: {
-    label: string
-    id: string
-  }
+  account: { label: string; id: string }
   scopes: string[]
 }
 
-type SessionsStore = {
-  [sessionId: string]: GitHubSession
+/**
+ * Encrypt with the Electron safeStorage "basic" scheme (what
+ * `--password-store=basic` uses on every platform): "v10" prefix +
+ * AES-128-CBC, key = PBKDF2-SHA1("peanuts","saltysalt",1,16), IV = 16×0x20.
+ * Platform-agnostic, so a value written here decrypts on the Windows runner.
+ */
+function encryptBasicV10(plaintext: string): Buffer {
+  const key = crypto.pbkdf2Sync('peanuts', 'saltysalt', 1, 16, 'sha1')
+  const iv = Buffer.alloc(16, 0x20) // 16 spaces
+  const cipher = crypto.createCipheriv('aes-128-cbc', key, iv)
+  const enc = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
+  return Buffer.concat([Buffer.from('v10', 'utf8'), enc])
+}
+
+/** VS Code stores secret values in ItemTable as `{"type":"Buffer","data":[…]}`. */
+function toItemTableBufferJSON(buf: Buffer): string {
+  return JSON.stringify({ type: 'Buffer', data: Array.from(buf) })
 }
 
 /**
- * Create a VS Code state.vscdb file with GitHub OAuth session
+ * Copilot "setup"/opt-in markers so the "Sign in to use AI Features" /
+ * onboarding modal doesn't block generation once the session is present. The
+ * entitlement (`copilot_for_business_seat_quota`) matches the Device-Flow test
+ * account; VS Code refreshes these from the entitlement API once signed in, so
+ * exact values aren't load-bearing — they just keep the first launch unblocked.
+ */
+function optInMarkers(): Array<[string, string]> {
+  return [
+    [
+      'chat.setupContext',
+      JSON.stringify({
+        entitlement: 8,
+        sku: 'copilot_for_business_seat_quota',
+        installed: true,
+        disabled: false,
+        untrusted: false,
+        disabledInWorkspace: false,
+        registered: true,
+        hidden: false,
+        completed: true,
+      }),
+    ],
+    ['chat.setupContext.migrated.v1', 'true'],
+    ['chat.usageBasedBilling', 'true'],
+    [
+      'workbench.panel.chat.hidden',
+      JSON.stringify([
+        { id: 'workbench.panel.chat.view.copilot', isHidden: false },
+      ]),
+    ],
+  ]
+}
+
+/**
+ * Create a VS Code state.vscdb with a GitHub OAuth session in the secret store.
  *
- * @param accessToken GitHub OAuth access token (gho_* format)
+ * @param accessToken GitHub OAuth access token (gho_ / ghu_ format)
  * @param outputPath Path to write the state.vscdb file
- * @param accountInfo Optional account info (will be fetched from GitHub if not provided)
+ * @param accountInfo Optional account info (fetched from GitHub if not provided)
  */
 export async function createVSCodeState(
   accessToken: string,
   outputPath: string,
   accountInfo?: { login: string; id: number }
 ): Promise<void> {
-  // Fetch account info from GitHub if not provided
   let account = accountInfo
   if (!account) {
     const response = await fetch('https://api.github.com/user', {
@@ -58,131 +118,75 @@ export async function createVSCodeState(
       account = { login: userData.login, id: userData.id }
       console.log(`[CreateState] Fetched GitHub user: ${account.login}`)
     } else {
-      // Use placeholder if fetch fails
       account = { login: 'github-user', id: 0 }
       console.log('[CreateState] Using placeholder account info')
     }
   }
 
-  // Create session ID (VS Code uses UUID-like format)
-  const sessionId = `github-session-${Date.now()}`
-
-  // Create session data in VS Code's expected format
   const session: GitHubSession = {
-    id: sessionId,
+    id: `${Date.now()}`,
     accessToken,
-    account: {
-      label: account.login,
-      id: String(account.id),
-    },
+    account: { label: account.login, id: String(account.id) },
     scopes: COPILOT_SCOPES,
   }
 
-  const sessionsStore: SessionsStore = {
-    [sessionId]: session,
-  }
+  // The github-authentication provider persists an ARRAY of sessions; the
+  // secret value (decrypted) is JSON.stringify(sessions[]).
+  const sessionsJson = JSON.stringify([session])
+  const secretValue = toItemTableBufferJSON(encryptBasicV10(sessionsJson))
 
-  // VS Code expects the sessions to be stored with a specific key format
-  // The key is "github.auth.sessions" and value is JSON stringified sessions
-  const stateKey = 'github.auth.sessions'
-  const stateValue = JSON.stringify(sessionsStore)
-
-  // Ensure output directory exists
   const outputDir = path.dirname(outputPath)
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true })
-  }
+  if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true })
 
-  // Create SQLite database
   const db = new Database(outputPath)
-
   try {
-    // Create the ItemTable that VS Code uses
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS ItemTable (
-        key TEXT PRIMARY KEY,
-        value BLOB
-      )
-    `)
-
-    // Insert the GitHub auth session
+    db.exec(
+      'CREATE TABLE IF NOT EXISTS ItemTable (key TEXT PRIMARY KEY, value BLOB)'
+    )
     const insert = db.prepare(
       'INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)'
     )
-    insert.run(stateKey, stateValue)
 
-    // Also add a marker to indicate this is a valid VS Code state db
+    // The session in the secret store (what ≥1.123 reads). Portable v10 here is
+    // readable on Linux (basic/peanuts); on Windows VS Code does its own sign-in
+    // (see native-signin.ts), so this helper is only the Linux PAT/device-flow
+    // fallback path.
+    insert.run(GITHUB_SESSION_SECRET_KEY, secretValue)
+    // Opt-in markers so the AI-features setup gate doesn't block.
+    for (const [k, v] of optInMarkers()) insert.run(k, v)
     insert.run('vscode.extensionGlobalState.version', '1')
 
-    console.log(`[CreateState] Created state.vscdb at: ${outputPath}`)
-    console.log(`[CreateState] GitHub session: ${sessionId}`)
+    console.log(`[CreateState] Wrote secret-store session at: ${outputPath}`)
     console.log(`[CreateState] Account: ${account.login} (${account.id})`)
-    console.log(`[CreateState] Scopes: ${COPILOT_SCOPES.join(', ')}`)
+    console.log(`[CreateState] Secret key: ${GITHUB_SESSION_SECRET_KEY}`)
   } finally {
     db.close()
   }
 }
 
 /**
- * Create state.vscdb from a previously stored token file
+ * Write ONLY the Copilot setup/opt-in markers into an existing (or new)
+ * state.vscdb, without touching the GitHub session. Used by the Windows native
+ * sign-in flow, where VS Code stores the session itself but the fresh sign-in
+ * lacks the "setup completed" markers that a pre-onboarded (captured) session
+ * carries — without them, Copilot Chat shows the first-use setup gate and never
+ * produces a real completion (only [title]/[progressMessages] scaffolding).
  */
-export async function createStateFromTokenFile(
-  tokenFilePath: string,
-  outputPath: string
-): Promise<void> {
-  if (!fs.existsSync(tokenFilePath)) {
-    throw new Error(`Token file not found: ${tokenFilePath}`)
-  }
-
-  const tokenData = JSON.parse(fs.readFileSync(tokenFilePath, 'utf8'))
-  const { accessToken } = tokenData
-
-  if (!accessToken) {
-    throw new Error('No accessToken found in token file')
-  }
-
-  await createVSCodeState(accessToken, outputPath)
-}
-
-/**
- * Verify a state.vscdb file contains valid GitHub auth
- */
-export function verifyStateFile(statePath: string): boolean {
-  if (!fs.existsSync(statePath)) {
-    console.log('[VerifyState] File does not exist')
-    return false
-  }
-
+export function writeCopilotSetupMarkers(outputPath: string): void {
+  const outputDir = path.dirname(outputPath)
+  if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true })
+  const db = new Database(outputPath)
   try {
-    const db = new Database(statePath, { readonly: true })
-    const row = db
-      .prepare('SELECT value FROM ItemTable WHERE key = ?')
-      .get('github.auth.sessions')
-    db.close()
-
-    if (!row) {
-      console.log('[VerifyState] No github.auth.sessions key found')
-      return false
-    }
-
-    const sessions = JSON.parse((row as { value: string }).value)
-    const sessionIds = Object.keys(sessions)
-
-    if (sessionIds.length === 0) {
-      console.log('[VerifyState] Sessions object is empty')
-      return false
-    }
-
-    const firstSession = sessions[sessionIds[0]]
-    console.log(`[VerifyState] Found session: ${firstSession.id}`)
-    console.log(`[VerifyState] Account: ${firstSession.account?.label}`)
-    console.log(
-      `[VerifyState] Token starts with: ${firstSession.accessToken?.substring(0, 10)}...`
+    db.exec(
+      'CREATE TABLE IF NOT EXISTS ItemTable (key TEXT PRIMARY KEY, value BLOB)'
     )
-
-    return Boolean(firstSession.accessToken)
-  } catch (err) {
-    console.log(`[VerifyState] Error: ${err}`)
-    return false
+    const insert = db.prepare(
+      'INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)'
+    )
+    for (const [k, v] of optInMarkers()) insert.run(k, v)
+    insert.run('vscode.extensionGlobalState.version', '1')
+    console.log(`[CreateState] Wrote Copilot setup markers to: ${outputPath}`)
+  } finally {
+    db.close()
   }
 }

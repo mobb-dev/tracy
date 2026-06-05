@@ -17,7 +17,6 @@ import { expect, test } from '@playwright/test'
 import type { ElectronApplication, Page } from 'playwright'
 import { _electron as electron } from 'playwright'
 
-import { decodeAndDecompressBase64 } from '../shared/compression-utils'
 import type { TracyRecord } from '../shared/mock-server'
 import { MockUploadServer } from '../shared/mock-server'
 import {
@@ -45,11 +44,13 @@ import {
   logRelevantEnvVars,
   logWindowsEnvironment,
 } from '../shared/windows-helpers'
-import { createVSCodeState } from './helpers/create-vscode-state'
+import { writeCopilotSetupMarkers } from './helpers/create-vscode-state'
 import {
-  loadCredentialsFromEnv,
-  performDeviceFlowOAuth,
-} from './helpers/device-flow-oauth'
+  installAuthTriggerExtension,
+  interceptOpenExternal,
+  performNativeVSCodeSignIn,
+} from './helpers/native-signin'
+import { loadCredentialsFromEnv } from './helpers/oauth-config'
 import {
   captureExtensionLogs,
   dismissDialogs,
@@ -59,8 +60,11 @@ import {
   waitForCopilotGenerationAndAccept,
 } from './vscode-ui-helpers'
 
-// Windows runners are slower — bump timeouts
-const TEST_TIMEOUT = 420000 // 7 minutes
+// Windows runners are slower, and native GitHub sign-in (browser login + email
+// device-verification) has variable latency (GitHub occasionally throttles
+// repeated CI logins). Budget enough to clear sign-in reliably. TODO: cut this
+// back once login is skipped via a captured browser storageState.
+const TEST_TIMEOUT = 720000 // 12 minutes
 const AI_RESPONSE_TIMEOUT = 120000 // 2 minutes for Copilot to respond
 const UPLOAD_WAIT_TIMEOUT = 90000 // 90 seconds for tracy upload
 const EXTENSION_POLL_INTERVAL = 5000
@@ -167,6 +171,9 @@ test.describe('VS Code Extension E2E (Windows)', () => {
   let testProfileDir: string
   let vscodePid: number | undefined
   let hasRealAuth = false
+  // GitHub test-account credentials for VS Code's native sign-in (set in
+  // beforeEach; the actual sign-in runs after launch in the test body).
+  let deviceFlowCreds: ReturnType<typeof loadCredentialsFromEnv> = null
   // Set when Copilot reports an expired GitHub token so we can downgrade to
   // infrastructure-only cleanly instead of hanging on a tracy-upload timeout.
   let copilotAuthInvalid = false
@@ -248,6 +255,12 @@ test.describe('VS Code Extension E2E (Windows)', () => {
       'github.copilot.chat.edits.allowFilesOutsideWorkspace': true,
       'chat.tools.global.autoApprove': true,
       'chat.tools.terminal.autoApprove': true,
+      // Force classic "Ask" chat instead of Copilot 0.51's default AGENT mode.
+      // A fresh free-tier (free_limited_copilot) sign-in stalls in agent mode
+      // ("Reasoning"/"Considering" forever) and never returns a completion, so
+      // no Copilot inference is captured. Ask mode produces a normal chat
+      // response that the tracer captures. Disabling agent leaves Ask as default.
+      'chat.agent.enabled': false,
       // VS Code 1.103+ disables side-loaded extensions that lack signatures.
       'extensions.verifySignature': false,
       'extensions.autoUpdate': false,
@@ -256,77 +269,27 @@ test.describe('VS Code Extension E2E (Windows)', () => {
     fs.writeFileSync(settingsPath, JSON.stringify(testSettings, null, 2))
     console.log('  Created VS Code settings with mock server URL')
 
-    // PRIORITY 0: Pre-captured state.vscdb (VSCODE_STATE_VSCDB_B64) — this
-    // comes from a portable profile that interactively signed in and clicked
-    // through the "Sign in to use AI Features" modal, so it includes the
-    // opt-in markers VS Code 1.116 checks at launch. All other auth paths
-    // synthesize a state.vscdb via createVSCodeState which LACKS those
-    // markers and leaves the modal blocking generation.
-    if (process.env.VSCODE_STATE_VSCDB_B64) {
-      console.log('  Setting up auth from VSCODE_STATE_VSCDB_B64...')
-      const secretLength = process.env.VSCODE_STATE_VSCDB_B64.length
-      console.log(`    Secret length: ${secretLength} chars`)
-      try {
-        const stateContent = decodeAndDecompressBase64(
-          process.env.VSCODE_STATE_VSCDB_B64,
-          false
-        )
-        const targetPath = path.join(globalStorageDir, 'state.vscdb')
-        fs.writeFileSync(targetPath, stateContent)
-        console.log(`    Wrote state.vscdb (${stateContent.length} bytes)`)
-        hasRealAuth = true
-      } catch (err) {
-        console.log(`    Failed to decode auth: ${err}`)
-      }
-    }
-
-    // PRIORITY 1: Device Flow OAuth — fallback only.
-    if (!hasRealAuth) {
-      const deviceFlowCreds = loadCredentialsFromEnv()
-      if (deviceFlowCreds) {
-        console.log('  Running Device Flow OAuth (fallback)...')
-        try {
-          const result = await performDeviceFlowOAuth(deviceFlowCreds, {
-            headless: true,
-            timeout: 120,
-            useFirefox: true,
-          })
-          if (result.success && result.accessToken) {
-            const targetPath = path.join(globalStorageDir, 'state.vscdb')
-            await createVSCodeState(result.accessToken, targetPath)
-            console.log('    Wrote state.vscdb from Device Flow OAuth')
-            hasRealAuth = true
-          } else {
-            console.log(`    Device Flow failed: ${result.error}`)
-          }
-        } catch (err) {
-          console.log(`    Device Flow error: ${err}`)
-        }
-      }
-    }
-
-    // PRIORITY 2: GITHUB_COPILOT_PAT — fallback, but note PATs don't
-    // unlock Copilot; this path mainly helps local dev.
-    if (!hasRealAuth && process.env.GITHUB_COPILOT_PAT) {
-      console.log('  Setting up auth from GITHUB_COPILOT_PAT (fallback)...')
-      try {
-        const targetPath = path.join(globalStorageDir, 'state.vscdb')
-        await createVSCodeState(process.env.GITHUB_COPILOT_PAT, targetPath)
-        console.log('    Wrote fresh state.vscdb from PAT')
-        hasRealAuth = true
-      } catch (err) {
-        console.log(`    Failed to build state.vscdb from PAT: ${err}`)
-      }
-    }
-
-    if (!hasRealAuth) {
+    // Windows auth strategy: NATIVE sign-in (driven after launch in the test
+    // body), NOT state.vscdb injection. On Windows, VS Code's secret store is
+    // encrypted with a machine/installation-bound key (Chromium os_crypt
+    // AES-256-GCM, key DPAPI-wrapped in `Local State`; `--password-store=basic`
+    // is a no-op on Windows), so a session synthesized off-box can never be
+    // decrypted → `secrets.get` returns empty → "Got 0 sessions". Instead we let
+    // VS Code perform its own GitHub sign-in (loopback OAuth) so it encrypts and
+    // stores the session with a key it can read back. The browser half reuses
+    // the GitHub login + email device-verification automation; the test-only
+    // auth-trigger extension (installed below) requests the session. See
+    // helpers/native-signin.ts.
+    deviceFlowCreds = loadCredentialsFromEnv()
+    if (deviceFlowCreds) {
       console.log(
-        '  No auth configured — set VSCODE_STATE_VSCDB_B64 or GITHUB_COPILOT_PAT'
+        '  Native VS Code sign-in will run after launch (creds present)'
       )
-    }
-
-    if (hasRealAuth) {
-      tracker.mark('Auth Configured')
+    } else {
+      console.log(
+        '  No sign-in creds (PLAYWRIGHT_GH_CLOUD_USER_EMAIL/PASSWORD) — ' +
+          'Copilot checkpoints will fail fast'
+      )
     }
 
     // Extension installation
@@ -391,6 +354,20 @@ test.describe('VS Code Extension E2E (Windows)', () => {
     forceEnableCopilotInStateDb(
       path.join(globalStorageDir, 'state.vscdb')
     )
+
+    // Copilot first-use setup markers. A fresh native sign-in (unlike a
+    // pre-onboarded captured session) otherwise lands on the Copilot setup gate,
+    // which lets chat scaffolding run but suppresses real completions.
+    if (deviceFlowCreds) {
+      writeCopilotSetupMarkers(path.join(globalStorageDir, 'state.vscdb'))
+    }
+
+    // Install the test-only auth-trigger extension — it requests a GitHub
+    // session on startup so the harness can drive VS Code's native sign-in.
+    if (deviceFlowCreds) {
+      installAuthTriggerExtension(extensionsDir)
+      console.log('    Installed auth-trigger extension for native sign-in')
+    }
 
     const extDirs = fs.readdirSync(extensionsDir)
     const mobbExt = extDirs.find((d) =>
@@ -550,6 +527,14 @@ test.describe('VS Code Extension E2E (Windows)', () => {
     await mainWindow.waitForLoadState('domcontentloaded')
     tracker.logTimestamp('VS Code window loaded')
     tracker.mark('VS Code Launched')
+
+    // Install the openExternal interceptor NOW (before the auth-trigger
+    // extension fires its sign-in request ~8s into startup), so VS Code's
+    // loopback OAuth URL is captured rather than handed to the OS browser.
+    if (deviceFlowCreds) {
+      await interceptOpenExternal(electronApp)
+      console.log('  openExternal interceptor installed')
+    }
     await mainWindow.screenshot({ path: 'test-results/vs-01-loaded-win.png' })
 
     try {
@@ -606,16 +591,73 @@ test.describe('VS Code Extension E2E (Windows)', () => {
       path: 'test-results/vs-03-extension-activated-win.png',
     })
 
-    // Copilot interaction checkpoints require a working state.vscdb. If the
-    // test secret is missing or decoding failed, fail fast with an actionable
-    // message — a silent infra-only pass hid regressions in the past.
+    // ═══════════════════════════════════════════════════════════════════════
+    // Native GitHub sign-in for Copilot. VS Code performs the loopback OAuth
+    // itself (so it stores the session with its own readable key); we capture
+    // the URL it opens and drive the browser through GitHub login + authorize.
+    // ═══════════════════════════════════════════════════════════════════════
+    if (deviceFlowCreds) {
+      console.log('  Performing native VS Code GitHub sign-in for Copilot...')
+      const signInResult = await performNativeVSCodeSignIn(
+        electronApp,
+        mainWindow,
+        deviceFlowCreds,
+        { headless: true }
+      )
+      if (signInResult.success) {
+        hasRealAuth = true
+        tracker.mark('Auth Configured')
+        console.log('    Native sign-in completed')
+      } else {
+        console.log(`    Native sign-in failed: ${signInResult.error}`)
+      }
+      await mainWindow.screenshot({
+        path: 'test-results/vs-03b-after-native-signin-win.png',
+      })
+    }
+
+    // Copilot interaction checkpoints require a real GitHub session. If native
+    // sign-in didn't complete, fail fast with an actionable message — a silent
+    // infra-only pass hid regressions in the past.
     if (!hasRealAuth) {
       throw new Error(
-        'No Copilot auth available. Set VSCODE_STATE_VSCDB_B64 ' +
-          '(see scripts/refresh-vscode-auth.sh) or provide Device Flow ' +
-          'credentials (PLAYWRIGHT_GH_CLOUD_USER_EMAIL/PASSWORD).'
+        'No Copilot auth available. Native VS Code sign-in did not complete. ' +
+          'Ensure PLAYWRIGHT_GH_CLOUD_USER_EMAIL/PASSWORD and ' +
+          'MOBB_CI_TEST_EMAIL_USERNAME/PASSWORD are set.'
       )
     }
+
+    // The Mobb extension's CopilotMonitor checks for the Copilot extension ONCE
+    // at activation — which happened at launch, BEFORE native sign-in, so it
+    // logged "Copilot extension not installed" and never started. Reload the
+    // window so the extension re-activates with the now-stored GitHub session
+    // and Copilot present; otherwise no Copilot inference is captured.
+    console.log('  Reloading window so CopilotMonitor detects Copilot...')
+    const requestsBeforeReload = mockServer.getRequestLog().length
+    await mainWindow.waitForTimeout(2000) // let VS Code persist the session
+    await mainWindow.keyboard.press('Control+Shift+P')
+    await mainWindow.waitForTimeout(1000)
+    await mainWindow.keyboard.type('Reload Window')
+    await mainWindow.waitForTimeout(1000)
+    await mainWindow.keyboard.press('Enter')
+    await mainWindow.waitForTimeout(5000) // reload tears down + restarts the host
+    await mainWindow.waitForLoadState('domcontentloaded').catch(() => {})
+    try {
+      await mainWindow.waitForSelector('.monaco-workbench', { timeout: 30000 })
+    } catch {
+      console.log('  workbench not detected after reload, continuing')
+    }
+    // Wait for the Mobb extension to re-activate (fresh GraphQL requests).
+    const reactivateStart = Date.now()
+    while (
+      mockServer.getRequestLog().length <= requestsBeforeReload &&
+      Date.now() - reactivateStart < 45000
+    ) {
+      await mainWindow.waitForTimeout(1000)
+    }
+    console.log(
+      `  Window reloaded; extension re-activated (requests: ${mockServer.getRequestLog().length})`
+    )
 
     // ═══════════════════════════════════════════════════════════════════════
     // CHECKPOINT 5: Copilot AI Prompt Sent
@@ -644,8 +686,8 @@ test.describe('VS Code Extension E2E (Windows)', () => {
     await mainWindow.waitForTimeout(3000)
     if (copilotAuthInvalid) {
       throw new Error(
-        'Copilot reports GitHub token is invalid/expired. ' +
-          'Refresh GITHUB_COPILOT_PAT (or VSCODE_STATE_VSCDB_B64) and rerun.'
+        'Copilot reports GitHub token is invalid/expired. The native sign-in ' +
+          'token was rejected — check the test GitHub account and rerun.'
       )
     }
 

@@ -18,6 +18,8 @@ import {
 } from '../mobbdev_src/features/analysis/context_file_scanner'
 import { runContextFileUploadPipeline } from '../mobbdev_src/features/analysis/context_file_uploader'
 import {
+  DEGENERATE_RECORDS_LOG_MESSAGE,
+  degenerateRecordsLogFields,
   prepareAndSendTracyRecords,
   type TracyRecordClientInput,
 } from '../mobbdev_src/features/analysis/graphql/tracy-batch-upload'
@@ -57,6 +59,12 @@ export async function uploadTracyRecords(
     undefined,
     options
   )
+  if (result.degenerate?.length) {
+    logger.warn(
+      degenerateRecordsLogFields(result.degenerate),
+      DEGENERATE_RECORDS_LOG_MESSAGE
+    )
+  }
   if (!result.ok) {
     logger.error({ errors: result.errors }, 'Tracy batch upload had errors')
     throw new Error('Tracy batch upload had errors')

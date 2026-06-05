@@ -5,7 +5,9 @@
  * Used for GitHub Device Verification during OAuth flow.
  */
 
-import { FetchMessageObject, ImapFlow } from 'imapflow'
+import { setTimeout as sleep } from 'node:timers/promises'
+
+import { ImapFlow } from 'imapflow'
 import * as qp from 'quoted-printable'
 
 type EmailVerificationParams = {
@@ -18,18 +20,34 @@ type EmailVerificationParams = {
   timeoutMs?: number
   imapHost?: string
   imapPort?: number
+  /**
+   * Ignore emails older than this. Set to just before the login that triggered
+   * the email so a STALE verification email from a previous run/attempt (still
+   * inside the recent window) can't be picked up and rejected by GitHub.
+   */
+  notBefore?: Date
 }
 
+// Only consider envelopes newer than this; the verification email is always the
+// freshest. Keeps the matching window tight and avoids stale codes.
+const RECENT_WINDOW_MS = 5 * 60 * 1000
+// How many of the newest messages to scan envelopes for (cheap — no body).
+const ENVELOPE_SCAN_COUNT = 30
+// Poll cadence while waiting for the email to land.
+const POLL_INTERVAL_MS = 4000
+
 /**
- * Fetch verification code from email via IMAP
+ * Fetch a verification code from email via IMAP.
  *
- * Connects to IMAP server and searches recent emails for a verification code.
- * Used for GitHub's "Verify your device" email flow.
+ * Performance: the verification email can take a few seconds to arrive, so we
+ * POLL rather than sleep-then-search-once. Each poll fetches only lightweight
+ * ENVELOPES (no body) for the newest messages, finds the one matching email,
+ * and downloads the full `source` for THAT message alone. Downloading full
+ * RFC822 source for dozens of messages is what made this slow (minutes on a
+ * busy Gmail inbox); scanning envelopes first keeps each poll fast.
  *
- * Supports:
- * - Gmail (imap.gmail.com) - requires App Password if 2FA enabled
- * - Google Workspace (imap.gmail.com) - same as Gmail
- * - Other providers via IMAP_HOST env var
+ * Supports Gmail / Google Workspace (imap.gmail.com, App Password) or any IMAP
+ * host via IMAP_HOST / IMAP_PORT.
  */
 export async function getVerificationCodeFromImapMail({
   email,
@@ -38,11 +56,11 @@ export async function getVerificationCodeFromImapMail({
   toEmail,
   subjectContent,
   verificationCodeRegex,
-  timeoutMs = 10000,
+  timeoutMs = 90000,
   imapHost,
   imapPort,
+  notBefore,
 }: EmailVerificationParams): Promise<string[]> {
-  // Use configured host or env var or default to Gmail
   const host = imapHost || process.env.IMAP_HOST || 'imap.gmail.com'
   const port = imapPort || parseInt(process.env.IMAP_PORT || '993', 10)
 
@@ -53,88 +71,75 @@ export async function getVerificationCodeFromImapMail({
     host,
     port,
     secure: true,
-    auth: {
-      user: email,
-      pass: password,
-    },
-    logger: false, // Disable verbose logging
+    auth: { user: email, pass: password },
+    logger: false,
   })
-
-  // Wait for email to arrive
-  console.log(
-    `[EmailVerification] Waiting ${timeoutMs}ms for email to arrive...`
-  )
-  await new Promise((resolve) => setTimeout(resolve, timeoutMs))
 
   const codes: string[] = []
 
+  await client.connect()
+  console.log('[EmailVerification] IMAP connected; polling for code...')
   try {
-    console.log('[EmailVerification] Attempting IMAP connection...')
-    await client.connect()
-    console.log('[EmailVerification] IMAP connected successfully')
-
     const lock = await client.getMailboxLock('INBOX')
-    console.log('[EmailVerification] Got mailbox lock on INBOX')
-
     try {
-      const status = await client.status('INBOX', {
-        messages: true,
-        recent: true,
-        uidNext: true,
-        uidValidity: true,
-        unseen: true,
-        highestModseq: true,
-      })
+      const deadline = Date.now() + timeoutMs
+      let attempt = 0
+      while (codes.length === 0 && Date.now() < deadline) {
+        attempt++
+        const cutoff = notBefore ?? new Date(Date.now() - RECENT_WINDOW_MS)
+        const status = await client.status('INBOX', { messages: true, uidNext: true })
+        const uidNext = status.uidNext ?? 1
+        const start = uidNext > ENVELOPE_SCAN_COUNT ? uidNext - ENVELOPE_SCAN_COUNT : 1
 
-      if (!status.uidNext) {
-        throw new Error('Email status retrieval failed')
-      }
-
-      // Fetch last 50 messages
-      const fetchMessages = client.fetch(
-        `${status.uidNext > 50 ? status.uidNext - 50 : 1}:*`,
-        {
-          envelope: true,
-          source: true,
-          flags: true,
-          labels: true,
-          uid: true,
-          bodyStructure: true,
-        }
-      )
-
-      const messages: FetchMessageObject[] = []
-      for await (const msg of fetchMessages) {
-        messages.unshift(msg) // Most recent first
-      }
-
-      for (const msg of messages) {
-        const envelope = msg?.envelope
-        const source = msg?.source
-        const from = envelope?.from?.[0]?.address
-        const to = envelope?.to?.[0]?.address
-        const subject = envelope?.subject
-        const date = envelope?.date
-
-        if (!source || !date || !from || !to || !subject) {
-          continue
-        }
-
-        const decodedSource = qp.decode(source.toString())
-        const fiveMinutesAgo = new Date(Date.now() - 1000 * 60 * 5)
-
-        // Check if this is a recent verification email
-        if (
-          date > fiveMinutesAgo &&
-          from.endsWith(fromEmailEndsWith) &&
-          to === toEmail &&
-          subject === subjectContent
-        ) {
-          const match = decodedSource.match(verificationCodeRegex)
-          if (match && match[1]) {
-            console.log(`[EmailVerification] Found code in email from ${date}`)
-            codes.push(match[1])
+        // Pass 1 — cheap: envelopes only (no body download). Collect matching
+        // messages with their dates so we can prefer the NEWEST one — a stale
+        // verification email from a prior run/attempt is otherwise picked up and
+        // rejected by GitHub.
+        const candidates: Array<{ uid: number; date: Date }> = []
+        for await (const msg of client.fetch(
+          `${start}:*`,
+          { envelope: true, uid: true },
+          { uid: true }
+        )) {
+          const env = msg.envelope
+          const from = env?.from?.[0]?.address
+          const to = env?.to?.[0]?.address
+          if (
+            env?.date &&
+            env.date >= cutoff &&
+            from?.endsWith(fromEmailEndsWith) &&
+            to === toEmail &&
+            env.subject === subjectContent &&
+            msg.uid
+          ) {
+            candidates.push({ uid: msg.uid, date: env.date })
           }
+        }
+        candidates.sort((a, b) => b.date.getTime() - a.date.getTime())
+
+        // Pass 2 — download source ONLY for matches, newest first; take the
+        // first code found and stop.
+        for (const { uid } of candidates) {
+          const full = await client.fetchOne(
+            String(uid),
+            { source: true },
+            { uid: true }
+          )
+          if (full && full.source) {
+            const decoded = qp.decode(full.source.toString())
+            const match = decoded.match(verificationCodeRegex)
+            if (match && match[1]) {
+              console.log(
+                `[EmailVerification] Found code on poll #${attempt} (uid ${uid})`
+              )
+              codes.push(match[1])
+              break
+            }
+          }
+        }
+
+        if (codes.length === 0) {
+          await sleep(POLL_INTERVAL_MS)
         }
       }
     } finally {
@@ -146,7 +151,7 @@ export async function getVerificationCodeFromImapMail({
 
   if (codes.length === 0) {
     console.log(
-      '[EmailVerification] No verification code found in recent emails'
+      `[EmailVerification] No verification code found within ${timeoutMs}ms`
     )
   }
 

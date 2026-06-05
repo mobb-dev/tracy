@@ -477,6 +477,14 @@ describe('Claude Code E2E with Hook Integration', () => {
         'summary',
         'progress',
         'attachment',
+        // Session-metadata events:
+        'agent-name',
+        'agent-color',
+        'ai-title',
+        'custom-title',
+        'worktree-state',
+        'pr-link',
+        'permission-mode',
       ]).toContain(parsedRawData.type)
 
       tracker.mark('Attribution Uploaded')

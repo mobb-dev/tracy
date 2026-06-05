@@ -527,6 +527,14 @@ describe.skipIf(process.platform !== 'win32')('Claude Code E2E with Hook Integra
         'summary',
         'progress',
         'attachment',
+        // Session-metadata events:
+        'agent-name',
+        'agent-color',
+        'ai-title',
+        'custom-title',
+        'worktree-state',
+        'pr-link',
+        'permission-mode',
       ]).toContain(parsedRawData.type)
 
       tracker.mark('Attribution Uploaded')

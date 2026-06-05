@@ -9,8 +9,12 @@ export default defineConfig({
   // Test timeout - increased for Windows which is slower
   timeout: process.platform === 'win32' ? 180000 : 120000,
 
-  // Global setup/teardown timeout
-  globalTimeout: 600000, // 10 minutes for all tests
+  // Whole-run ceiling. The Windows native sign-in (browser GitHub login + email
+  // verification) is slower and more variable than injection; with 1 CI retry a
+  // run can need two longer attempts. Other tests finish well within this — it's
+  // a ceiling, not a fixed wait. TODO: reduce once login uses a captured
+  // browser storageState (skips the slow interactive login).
+  globalTimeout: 1200000, // 20 minutes
 
   // Fail fast on CI
   fullyParallel: false, // Run tests serially for Electron tests

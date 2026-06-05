@@ -1,0 +1,13 @@
+{
+  "name": "mobb-e2e-auth-trigger",
+  "publisher": "mobb-e2e",
+  "version": "0.0.1",
+  "engines": { "vscode": "^1.80.0" },
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [
+      { "command": "mobbE2eAuthTrigger.signIn", "title": "Mobb E2E: Trigger GitHub Sign-In" }
+    ]
+  }
+}

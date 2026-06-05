@@ -8,8 +8,12 @@
 // VS Code's GitHub OAuth client ID (public, from VS Code source)
 export const VSCODE_GITHUB_CLIENT_ID = '01ab8ac9400c4e429b23'
 
-// Scopes needed for Copilot
-export const OAUTH_SCOPES = 'read:user user:email copilot'
+// Scopes VS Code requests for a GitHub/Copilot session. Must match the scope
+// set VS Code's github-authentication provider stores and matches against (and
+// the session scopes written by create-vscode-state.ts) — otherwise the stored
+// session is never returned to Copilot ("Got 0 sessions"). Verified against a
+// known-good captured session: read:user / user:email / repo / workflow.
+export const OAUTH_SCOPES = 'read:user user:email repo workflow'
 
 export type DeviceCodeResponse = {
   device_code: string

@@ -472,6 +472,14 @@ describe.skipIf(process.platform !== 'win32')('Claude Code E2E — Multi-Turn In
           'summary',
           'progress',
           'attachment',
+          // Session-metadata events:
+          'agent-name',
+          'agent-color',
+          'ai-title',
+          'custom-title',
+          'worktree-state',
+          'pr-link',
+          'permission-mode',
         ]).toContain(parsed.type)
       }
 
