@@ -11,6 +11,7 @@
  */
 
 import * as fs from 'node:fs'
+import * as os from 'node:os'
 import * as path from 'node:path'
 
 import { expect, test } from '@playwright/test'
@@ -62,12 +63,38 @@ import {
 
 // Windows runners are slower, and native GitHub sign-in (browser login + email
 // device-verification) has variable latency (GitHub occasionally throttles
-// repeated CI logins). Budget enough to clear sign-in reliably. TODO: cut this
-// back once login is skipped via a captured browser storageState.
+// repeated CI logins). Budget enough to clear sign-in reliably while keeping
+// `2 × TEST_TIMEOUT < globalTimeout` (see playwright.config.ts) so a CI retry
+// can actually complete. 12 min holds with a 25-min global ceiling (2×12 < 25)
+// and leaves room for ONE bounded sign-in hang to be absorbed by the in-process
+// retry below (a hung attempt + a fast cached retry + the rest still fit).
 const TEST_TIMEOUT = 720000 // 12 minutes
 const AI_RESPONSE_TIMEOUT = 120000 // 2 minutes for Copilot to respond
 const UPLOAD_WAIT_TIMEOUT = 90000 // 90 seconds for tracy upload
 const EXTENSION_POLL_INTERVAL = 5000
+// Max attempts to drive VS Code's native GitHub sign-in within a single test
+// before giving up. Re-driving just the OAuth browser is cheap (seconds) vs a
+// full test-level retry (relaunch Electron + reinstall extensions = minutes),
+// so we absorb transient OAuth-page / device-verification flakiness here first.
+// Bounded at 2 so the worst case stays within TEST_TIMEOUT; the Playwright
+// test-level retry (config retries:1) is the backstop beyond that.
+const SIGN_IN_MAX_ATTEMPTS = 2
+// Hard ceiling on a SINGLE sign-in attempt's browser flow. Without it one hung
+// step (seen running ~7.5 min after the device-verification code was fetched)
+// consumes the whole per-test budget and starves the retry above, so the test
+// only ever survives via the expensive Playwright test-level retry. A legit
+// sign-in (login + ~90s email-code poll + authorize) lands well under 4 min, so
+// this aborts only genuine hangs — freeing time for attempt 2 to finish cleanly.
+const SIGN_IN_ATTEMPT_TIMEOUT = 240000 // 4 minutes
+// Persisted browser storageState (GitHub cookies incl. device-trust) so repeat
+// sign-ins — across the in-process retries above AND across a CI test retry on
+// the same runner — skip the password + email-verification dance. Lives outside
+// the per-test profile dir (which is recreated each attempt). Honors an env
+// override so CI can later restore/save it via actions/cache for cross-run
+// reuse; defaults to a stable temp path that survives within-run retries.
+const SIGN_IN_STATE_PATH =
+  process.env.GITHUB_AUTH_STATE_PATH ||
+  path.join(os.tmpdir(), 'mobb-vscode-gh-auth-state.json')
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Windows-specific VS Code helpers
@@ -552,9 +579,14 @@ test.describe('VS Code Extension E2E (Windows)', () => {
     console.log('  Waiting for extension activation...')
     const activationStart = Date.now()
     let lastLoggedCount = 0
+    // 75s, not 30s: on a busy Windows runner a *passing* run has taken ~26s to
+    // emit its first GraphQL request, so a 30s cap was a coin-flip and a common
+    // source of spurious "activation failed" flakes. This is an upper bound —
+    // the loop exits the instant the first request lands.
+    const ACTIVATION_TIMEOUT = 75000
     while (
       mockServer.getRequestLog().length === 0 &&
-      Date.now() - activationStart < 30000
+      Date.now() - activationStart < ACTIVATION_TIMEOUT
     ) {
       await mainWindow.waitForTimeout(500)
       const elapsed = Date.now() - activationStart
@@ -598,18 +630,41 @@ test.describe('VS Code Extension E2E (Windows)', () => {
     // ═══════════════════════════════════════════════════════════════════════
     if (deviceFlowCreds) {
       console.log('  Performing native VS Code GitHub sign-in for Copilot...')
-      const signInResult = await performNativeVSCodeSignIn(
-        electronApp,
-        mainWindow,
-        deviceFlowCreds,
-        { headless: true }
-      )
-      if (signInResult.success) {
-        hasRealAuth = true
-        tracker.mark('Auth Configured')
-        console.log('    Native sign-in completed')
-      } else {
-        console.log(`    Native sign-in failed: ${signInResult.error}`)
+      // Retry the sign-in in-process before failing the whole test. Each attempt
+      // re-drives only the OAuth browser (seconds); a full test-level retry would
+      // relaunch Electron and reinstall extensions (minutes). The first attempt
+      // that completes a github.com login persists its cookies to
+      // SIGN_IN_STATE_PATH, so subsequent attempts skip the password + email
+      // device-verification step entirely.
+      let lastSignInError: string | undefined
+      for (let attempt = 1; attempt <= SIGN_IN_MAX_ATTEMPTS; attempt++) {
+        console.log(`    Sign-in attempt ${attempt}/${SIGN_IN_MAX_ATTEMPTS}...`)
+        const signInResult = await performNativeVSCodeSignIn(
+          electronApp,
+          mainWindow,
+          deviceFlowCreds,
+          {
+            headless: true,
+            storageStatePath: SIGN_IN_STATE_PATH,
+            browserTimeoutMs: SIGN_IN_ATTEMPT_TIMEOUT,
+          }
+        )
+        if (signInResult.success) {
+          hasRealAuth = true
+          tracker.mark('Auth Configured')
+          console.log(`    Native sign-in completed (attempt ${attempt})`)
+          break
+        }
+        lastSignInError = signInResult.error
+        console.log(
+          `    Native sign-in attempt ${attempt} failed: ${signInResult.error}`
+        )
+      }
+      if (!hasRealAuth) {
+        console.log(
+          `    Native sign-in failed after ${SIGN_IN_MAX_ATTEMPTS} attempts` +
+            (lastSignInError ? `: ${lastSignInError}` : '')
+        )
       }
       await mainWindow.screenshot({
         path: 'test-results/vs-03b-after-native-signin-win.png',

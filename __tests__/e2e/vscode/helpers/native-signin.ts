@@ -113,6 +113,18 @@ export type NativeSignInOptions = {
   captureTimeoutMs?: number
   /** Max time for the browser to complete login+authorize+callback (ms). */
   browserTimeoutMs?: number
+  /**
+   * Path to a Playwright storageState JSON for the GitHub sign-in browser. When
+   * the file exists it is loaded so an already-logged-in github.com session
+   * (cookies incl. device-trust) lets `loginToGitHub` skip the password + email
+   * device-verification step. After a successful sign-in the (possibly updated)
+   * state is written back to this path so the next sign-in — on a retry or a
+   * later run on the same machine — reuses it. The interactive OAuth login is
+   * the slowest and flakiest step, so reusing it is the single biggest
+   * stability win. VS Code still performs its own loopback OAuth and stores its
+   * own session; only the browser-side github.com login is cached.
+   */
+  storageStatePath?: string
 }
 
 const DEFAULT_CAPTURE_TIMEOUT = 45000
@@ -424,43 +436,111 @@ async function driveBrowserSignIn(
   const browser: Browser = await firefox.launch({
     headless: options.headless ?? true,
   })
+  // Hard ceiling on the whole browser flow. Without it a single step — observed
+  // hanging for ~7.5 min after the device-verification code was fetched — runs
+  // until the per-test timeout kills the Electron app, which (a) burns the whole
+  // test budget and (b) defeats the in-process retry, since attempt 1 never
+  // yields. Bounding here lets a hung attempt abort fast so the caller's retry
+  // (with cached cookies) can finish inside the same test. The browser is closed
+  // in `finally` on either path, so a timeout never leaks a Firefox process.
+  const timeoutMs = options.browserTimeoutMs ?? DEFAULT_BROWSER_TIMEOUT
+  const abort = new AbortController()
   try {
-    const context = await browser.newContext({
-      viewport: { width: 1280, height: 720 },
-    })
-    const page = await context.newPage()
+    const work = (async () => {
+      // Reuse a cached github.com session if we have one — `loginToGitHub` then
+      // short-circuits (no password, no email device-verification), which is the
+      // slow/flaky path we most want to avoid on retries and repeat runs.
+      const reuseState =
+        options.storageStatePath && fs.existsSync(options.storageStatePath)
+      if (reuseState) {
+        console.log(
+          `[NativeSignIn] reusing cached GitHub session: ${options.storageStatePath}`
+        )
+      }
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 720 },
+        ...(reuseState ? { storageState: options.storageStatePath } : {}),
+      })
+      // ROOT-CAUSE GUARD: Playwright's default action/navigation timeout is 0
+      // (unlimited). The device-verification step (`codeInput.fill` + submit
+      // `click`) was observed hanging ~7.5 min — the GitHub OTP element is
+      // momentarily not actionable and, with no ceiling, the action waits until
+      // the per-test timeout kills the app. Bounding every action in THIS
+      // (Firefox) sign-in context makes a stuck interaction fail in ~30s, so the
+      // in-process retry recovers in seconds instead of burning the test budget.
+      // Scoped to this context only — the Electron/VS Code page keeps its own
+      // explicit timeouts (see __tests__/e2e/LESSONS.md on why defaults are
+      // unreliable there). Explicit per-call timeouts still override these.
+      context.setDefaultTimeout(30000)
+      context.setDefaultNavigationTimeout(45000)
+      const page = await context.newPage()
 
-    // 1) Establish a logged-in GitHub session (handles device verification).
-    await loginToGitHub(page, credentials)
+      // 1) Establish a logged-in GitHub session (handles device verification).
+      await loginToGitHub(page, credentials)
 
-    // 2) Hit VS Code's loopback /signin → 302 to GitHub OAuth authorize.
-    console.log('[NativeSignIn] navigating to loopback /signin URL...')
-    await page.goto(signinUrl, { waitUntil: 'domcontentloaded' }).catch(() => {})
-    await page.waitForTimeout(1500)
+      // Persist the (now logged-in) github.com session so the next sign-in skips
+      // the interactive login. Best-effort: a failure to save must not fail the
+      // sign-in itself. Done right after login — before the OAuth authorize
+      // dance, whose page redirects can close the context out from under us.
+      if (options.storageStatePath) {
+        try {
+          fs.mkdirSync(path.dirname(options.storageStatePath), {
+            recursive: true,
+          })
+          await context.storageState({ path: options.storageStatePath })
+          console.log(
+            `[NativeSignIn] saved GitHub session to ${options.storageStatePath}`
+          )
+        } catch (err) {
+          console.log(`[NativeSignIn] could not save GitHub session: ${err}`)
+        }
+      }
 
-    // 3) Click through the authorize/consent UI.
-    const authorized = await clickThroughAuthorize(page)
-    if (!authorized) {
-      throw new Error('Failed to authorize VS Code on the GitHub OAuth page.')
-    }
+      // 2) Hit VS Code's loopback /signin → 302 to GitHub OAuth authorize.
+      console.log('[NativeSignIn] navigating to loopback /signin URL...')
+      await page
+        .goto(signinUrl, { waitUntil: 'domcontentloaded' })
+        .catch(() => {})
+      await page.waitForTimeout(1500)
 
-    // 4) Follow GitHub → vscode.dev/redirect → 127.0.0.1/callback so VS Code's
-    //    server receives the code. The page may close once it redirects, so all
-    //    waits here tolerate a closed page — reaching the callback IS success.
-    try {
-      await page.waitForURL(/127\.0\.0\.1:\d+\/callback/, { timeout: 30000 })
-      console.log(`[NativeSignIn] reached callback: ${page.url()}`)
-    } catch {
-      const finalUrl = page.isClosed() ? '(page closed)' : page.url()
-      console.log(
-        `[NativeSignIn] callback wait ended (final URL: ${finalUrl}); ` +
-          'VS Code may have already consumed the code'
-      )
-    }
-    // Give VS Code's local server a moment to exchange the code + persist.
-    // Page-independent sleep so a closed callback page doesn't throw.
-    await sleep(3000)
+      // 3) Click through the authorize/consent UI.
+      const authorized = await clickThroughAuthorize(page)
+      if (!authorized) {
+        throw new Error('Failed to authorize VS Code on the GitHub OAuth page.')
+      }
+
+      // 4) Follow GitHub → vscode.dev/redirect → 127.0.0.1/callback so VS Code's
+      //    server receives the code. The page may close once it redirects, so all
+      //    waits here tolerate a closed page — reaching the callback IS success.
+      try {
+        await page.waitForURL(/127\.0\.0\.1:\d+\/callback/, { timeout: 30000 })
+        console.log(`[NativeSignIn] reached callback: ${page.url()}`)
+      } catch {
+        const finalUrl = page.isClosed() ? '(page closed)' : page.url()
+        console.log(
+          `[NativeSignIn] callback wait ended (final URL: ${finalUrl}); ` +
+            'VS Code may have already consumed the code'
+        )
+      }
+      // Give VS Code's local server a moment to exchange the code + persist.
+      // Page-independent sleep so a closed callback page doesn't throw.
+      await sleep(3000)
+    })()
+    // Swallow a late rejection if the timeout wins and `browser.close()` below
+    // tears the flow down mid-step — otherwise it surfaces as an unhandled
+    // rejection after we've already returned a failure to the caller.
+    work.catch(() => {})
+
+    const guard = sleep(timeoutMs, undefined, { signal: abort.signal }).then(
+      () => {
+        throw new Error(`GitHub sign-in browser flow exceeded ${timeoutMs}ms`)
+      }
+    )
+    guard.catch(() => {})
+
+    await Promise.race([work, guard])
   } finally {
+    abort.abort() // cancel the guard timer when work wins
     await browser.close().catch(() => {})
   }
 }

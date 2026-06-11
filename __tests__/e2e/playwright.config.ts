@@ -9,12 +9,16 @@ export default defineConfig({
   // Test timeout - increased for Windows which is slower
   timeout: process.platform === 'win32' ? 180000 : 120000,
 
-  // Whole-run ceiling. The Windows native sign-in (browser GitHub login + email
-  // verification) is slower and more variable than injection; with 1 CI retry a
-  // run can need two longer attempts. Other tests finish well within this — it's
-  // a ceiling, not a fixed wait. TODO: reduce once login uses a captured
-  // browser storageState (skips the slow interactive login).
-  globalTimeout: 1200000, // 20 minutes
+  // Whole-run ceiling. This MUST exceed `retries+1` × the per-test timeout, or a
+  // slow first attempt makes the retry impossible — the run hits globalTimeout
+  // mid-retry and reports "Timed out waiting Ns for the test suite" instead of a
+  // real result. The Windows VS Code test sets a 12-min per-test budget
+  // (TEST_TIMEOUT) and CI runs with retries:1 → 2 attempts × 12 min = 24 min;
+  // 25 min keeps that under the ceiling. The Windows job
+  // itself allows 45 min, so this ceiling is the binding constraint, not CI.
+  // Other tests finish well within this — it's a ceiling, not a fixed wait.
+  // TODO: reduce once login reliably reuses a captured browser storageState.
+  globalTimeout: 1500000, // 25 minutes
 
   // Fail fast on CI
   fullyParallel: false, // Run tests serially for Electron tests
