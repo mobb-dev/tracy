@@ -484,7 +484,7 @@ export async function getWorkspaceGitRepositories(
       const existingRoots = new Set(results.map((r) => r.gitRoot))
       for (const repo of repoResults) {
         if (repo && !existingRoots.has(repo.gitRoot)) {
-          logger.info(
+          logger.debug(
             `Added nested repository: ${repo.gitRoot} -> ${repo.gitRepoUrl}`
           )
           results.push(repo)
