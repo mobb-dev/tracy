@@ -27,16 +27,41 @@ export class TracyCoordinator {
     organizationId: string,
     private readonly view: IView
   ) {
-    this.controllers = repositories.map(
-      (repo) =>
-        new TracyController(
-          new GitBlameCache(repo.gitRoot),
-          new AIBlameCache(repo.gitRepoUrl, organizationId, repo.gitRoot),
-          view,
-          repo.gitRepoUrl,
-          repo.gitRoot
-        )
-    )
+    this.controllers = repositories
+      .map((repo) => {
+        // Construct the caches into locals first so we can dispose them if a
+        // later step throws — otherwise a failed controller would orphan caches
+        // that have already registered listeners.
+        let gitBlameCache: GitBlameCache | undefined
+        let aiBlameCache: AIBlameCache | undefined
+        try {
+          gitBlameCache = new GitBlameCache(repo.gitRoot)
+          aiBlameCache = new AIBlameCache(
+            repo.gitRepoUrl,
+            organizationId,
+            repo.gitRoot
+          )
+          return new TracyController(
+            gitBlameCache,
+            aiBlameCache,
+            view,
+            repo.gitRepoUrl,
+            repo.gitRoot
+          )
+        } catch (err) {
+          // Defense in depth: a single repo's setup failing must never abort
+          // the whole coordinator (and with it the CursorMonitor). Dispose
+          // anything already constructed so it can't leak listeners.
+          gitBlameCache?.dispose()
+          aiBlameCache?.dispose()
+          logger.warn(
+            { err, gitRoot: repo.gitRoot },
+            'TracyCoordinator: failed to initialize controller'
+          )
+          return undefined
+        }
+      })
+      .filter((c): c is TracyController => c !== undefined)
     this.disposables.push(
       vscode.window.onDidChangeTextEditorSelection(
         this.onSelectionChange.bind(this)

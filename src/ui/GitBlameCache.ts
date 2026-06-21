@@ -22,50 +22,135 @@ export type GitBlameInfo = {
 // Size cap to prevent unbounded memory growth
 const MAX_CACHE_SIZE = 100
 
+/** Minimal shape of the vscode.git API we depend on (subset of `git.d.ts`). */
+type GitRepository = {
+  rootUri: vscode.Uri
+  state: {
+    HEAD?: { commit?: string }
+    onDidChange: (cb: () => void) => vscode.Disposable
+  }
+}
+type GitApi = {
+  state: 'uninitialized' | 'initialized'
+  repositories: GitRepository[]
+  onDidChangeState: (
+    cb: (state: 'uninitialized' | 'initialized') => void
+  ) => vscode.Disposable
+  onDidOpenRepository: (cb: (repo: GitRepository) => void) => vscode.Disposable
+}
+type GitExtensionExports = { getAPI: (version: number) => GitApi }
+
 export class GitBlameCache {
   private gitHeadDisposable: vscode.Disposable | undefined
+  /** Transient listeners used while resolving the repo (state/open events). */
+  private gitSetupDisposables: vscode.Disposable[] = []
+  /** Set in dispose() so the async setup can bail and not leak listeners. */
+  private disposed = false
   private cache = new Map<string, GitBlameInfo>()
   private lastHeadCommit: string | undefined
 
   constructor(private repoPath: string) {
-    this.setupGitHeadListener()
+    // Fire-and-forget: the HEAD listener is non-critical and its setup is
+    // async (it may need to activate vscode.git). It must never throw out of
+    // the constructor — this runs synchronously during extension activation,
+    // and a throw here would abort the whole Tracy coordinator/monitor.
+    void this.setupGitHeadListener()
   }
 
-  private setupGitHeadListener(): void {
-    const gitExt = vscode.extensions.getExtension('vscode.git')?.exports
-    const git = gitExt?.getAPI(1)
-    const repo = (
-      git?.repositories as
-        | {
-            rootUri: vscode.Uri
-            state: {
-              HEAD?: { commit?: string }
-              onDidChange: (cb: () => void) => vscode.Disposable
-            }
-          }[]
-        | undefined
-    )?.find((r) => pathsEqual(r.rootUri.fsPath, this.repoPath))
-    if (!repo) {
-      logger.warn(
-        `GitBlameCache: No git repository found for ${this.repoPath}, HEAD listener not set up.`
+  private async setupGitHeadListener(): Promise<void> {
+    try {
+      const gitExtension = vscode.extensions.getExtension('vscode.git')
+      if (!gitExtension) {
+        logger.warn(
+          { repoPath: this.repoPath },
+          'GitBlameCache: vscode.git extension not found, HEAD listener not set up.'
+        )
+        return
+      }
+      // Reading `.exports` before the extension is activated throws
+      // ("Extension 'vscode.git' is not known or not activated"). Activation
+      // order between extensions isn't guaranteed, so activate it first.
+      if (!gitExtension.isActive) {
+        await gitExtension.activate()
+      }
+      if (this.disposed) {
+        return
+      }
+      const git = (
+        gitExtension.exports as GitExtensionExports | undefined
+      )?.getAPI(1)
+      if (!git) {
+        logger.warn(
+          { repoPath: this.repoPath },
+          'GitBlameCache: git API unavailable, HEAD listener not set up.'
+        )
+        return
+      }
+      // `git.repositories` is populated asynchronously, so it is usually empty
+      // right after activation. Wait for the API to finish initializing before
+      // reading it, otherwise the listener would silently never attach.
+      if (git.state !== 'initialized') {
+        await this.waitForGitInitialized(git)
+        if (this.disposed) {
+          return
+        }
+      }
+      const repo = git.repositories.find((r) =>
+        pathsEqual(r.rootUri.fsPath, this.repoPath)
       )
+      if (repo) {
+        this.attachHeadListener(repo)
+        return
+      }
+      // Our repo isn't open yet — attach if/when it is opened later.
+      const openDisposable = git.onDidOpenRepository((opened) => {
+        if (
+          this.disposed ||
+          !pathsEqual(opened.rootUri.fsPath, this.repoPath)
+        ) {
+          return
+        }
+        this.attachHeadListener(opened)
+      })
+      this.gitSetupDisposables.push(openDisposable)
+    } catch (err) {
+      // Degrade gracefully: without the listener the blame cache simply won't
+      // auto-clear on HEAD change — far better than aborting activation.
+      logger.warn(
+        { err, repoPath: this.repoPath },
+        'GitBlameCache: failed to set up git HEAD listener'
+      )
+    }
+  }
+
+  /** Resolves once the git API is `initialized` (so `repositories` is filled). */
+  private waitForGitInitialized(git: GitApi): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const stateDisposable = git.onDidChangeState((state) => {
+        if (state === 'initialized') {
+          stateDisposable.dispose()
+          resolve()
+        }
+      })
+      this.gitSetupDisposables.push(stateDisposable)
+    })
+  }
+
+  /** Wire the HEAD-change listener for a resolved repository. */
+  private attachHeadListener(repo: GitRepository): void {
+    if (this.disposed) {
       return
     }
     this.lastHeadCommit = repo.state.HEAD?.commit
-
     this.gitHeadDisposable = repo.state.onDidChange(() => {
-      const head = repo.state.HEAD
-      const newCommit = head?.commit
-
-      // same branch name, different commit => commit happened
+      const newCommit = repo.state.HEAD?.commit
+      // same branch name, different commit => a commit happened; drop the cache
       if (newCommit && newCommit !== this.lastHeadCommit) {
         logger.info(
           `GitBlameCache: Detected HEAD change from ${this.lastHeadCommit} to ${newCommit}, clearing blame cache.`
         )
         this.lastHeadCommit = newCommit
-
-        // invalidate your blame cache here
-        this.cache.clear() // or clear just affected files
+        this.cache.clear()
       }
     })
   }
@@ -209,7 +294,12 @@ export class GitBlameCache {
   }
 
   dispose(): void {
+    this.disposed = true
     this.gitHeadDisposable?.dispose()
+    for (const d of this.gitSetupDisposables) {
+      d.dispose()
+    }
+    this.gitSetupDisposables = []
     this.clearAll()
   }
 }

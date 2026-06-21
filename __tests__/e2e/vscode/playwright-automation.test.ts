@@ -7,10 +7,10 @@ import * as zlib from 'node:zlib'
 import { expect, test } from '@playwright/test'
 import AdmZip from 'adm-zip'
 import type { ElectronApplication, Page } from 'playwright'
-import { _electron as electron } from 'playwright'
 
 import { decodeAndDecompressBase64 } from '../shared/compression-utils'
 import { initGitRepository } from '../shared/git-utils'
+import { launchElectronWithRetry } from '../shared/launch-electron'
 import type { TracyRecord } from '../shared/mock-server'
 import { MockUploadServer } from '../shared/mock-server'
 import {
@@ -510,7 +510,7 @@ test.describe('VS Code Extension E2E (Copilot)', () => {
     console.log('\n🚀 Launching VS Code...')
     const vscodePath = getVSCodeExecutablePath()
     const workspaceFolderUri = `file://${workspaceDir}`
-    electronApp = await electron.launch({
+    electronApp = await launchElectronWithRetry({
       executablePath: vscodePath,
       args: [
         `--user-data-dir=${testProfileDir}`,

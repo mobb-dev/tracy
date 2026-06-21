@@ -6,7 +6,6 @@ import { setTimeout } from 'node:timers/promises'
 import * as vscode from 'vscode'
 
 import { GitService } from '../mobbdev_src/features/analysis/scm/services/GitService'
-import { parseScmURL } from '../mobbdev_src/features/analysis/scm/shared/src/urlParser'
 import { createGQLClient } from './gqlClientFactory'
 import { logger } from './logger'
 import { canonicalizeRepoPath, pathsEqual, toOsPath } from './pathUtils'
@@ -437,7 +436,7 @@ export async function getWorkspaceGitRepositories(
           branch: head.branch,
           commitSha: head.commitSha,
         })
-        logger.info(`Found git repository at workspace root: ${gitRoot}`)
+        logger.debug(`Found git repository at workspace root: ${gitRoot}`)
       } else {
         logger.warn('Git repository found but no remote URL available')
       }
@@ -581,8 +580,8 @@ export function getRelevantRepo(filePath?: string): GitRepository | null {
 
 /**
  * Gets the normalized repository URL from the current workspace.
- * Returns null if not in a git repository or if the URL is not a recognized SCM provider.
- * Supports GitHub, GitLab, Azure DevOps, and Bitbucket repositories.
+ * Returns null only if not in a git repository. Recognized cloud SCMs (GitHub,
+ * GitLab, Azure DevOps, Bitbucket) and self-hosted / enterprise hosts are all kept.
  * For multi-repo workspaces, returns the repository matching the given filePath.
  * If no repo is found for the given filePath, triggers a rescan to detect newly added repositories.
  */
@@ -639,8 +638,9 @@ async function discoverRepoFromFilePath(
 
 /**
  * Resolve the GitRepository (URL + gitRoot) for a file path, applying the
- * same refresh+discover fallback as getNormalizedRepoUrl. Returns null if no
- * repo is found or the remote URL is not a recognized SCM provider.
+ * same refresh+discover fallback as getNormalizedRepoUrl. Returns null only if
+ * no repo is found. Self-hosted / enterprise remotes (scmType "Unknown") are
+ * kept — gitRepoUrl is already the canonical URL.
  */
 export async function getNormalizedRepo(
   filePath?: string
@@ -677,21 +677,24 @@ export async function getNormalizedRepo(
     return null
   }
 
-  const parsed = parseScmURL(repo.gitRepoUrl)
-  if (parsed?.scmType && parsed.scmType !== 'Unknown') {
-    // Re-read branch/commitSha fresh on every call. The cached
-    // repoInfo.repositories array snapshots these at discovery time; we don't
-    // want stale branch/commit data persisting after a checkout. gitRoot and
-    // gitRepoUrl are stable per-repo so no rediscovery needed.
-    const head = await readHeadState(repo.gitRoot)
-    return {
-      ...repo,
-      branch: head.branch,
-      commitSha: head.commitSha,
-    }
+  // Re-read branch/commitSha fresh on every call. The cached
+  // repoInfo.repositories array snapshots these at discovery time; we don't
+  // want stale branch/commit data persisting after a checkout. gitRoot and
+  // gitRepoUrl are stable per-repo so no rediscovery needed.
+  //
+  // Keep self-hosted / enterprise remotes that parseScmURL classifies as scmType
+  // "Unknown" (GitHub Enterprise, self-hosted GitLab, Bitbucket Server, ...).
+  // gitRepoUrl is already the canonical URL from getRemoteUrl(); discarding
+  // "Unknown" here used to leave enterprise users' events repo-less (and, because
+  // repo+branch+commit are returned together, dropped their git state too),
+  // forcing them into the slow "repository_url IS NULL" AI-blame query branch.
+  // Mirrors the readRepoState fix in upload_ai_blame.ts.
+  const head = await readHeadState(repo.gitRoot)
+  return {
+    ...repo,
+    branch: head.branch,
+    commitSha: head.commitSha,
   }
-
-  return null
 }
 
 export async function getNormalizedRepoUrl(

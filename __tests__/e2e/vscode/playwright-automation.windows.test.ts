@@ -16,8 +16,8 @@ import * as path from 'node:path'
 
 import { expect, test } from '@playwright/test'
 import type { ElectronApplication, Page } from 'playwright'
-import { _electron as electron } from 'playwright'
 
+import { launchElectronWithRetry } from '../shared/launch-electron'
 import type { TracyRecord } from '../shared/mock-server'
 import { MockUploadServer } from '../shared/mock-server'
 import {
@@ -506,7 +506,7 @@ test.describe('VS Code Extension E2E (Windows)', () => {
     console.log('  └─────────────────────────────────────────────')
 
     const workspaceFolderUri = `file:///${workspaceDir.replace(/\\/g, '/')}`
-    electronApp = await electron.launch({
+    electronApp = await launchElectronWithRetry({
       executablePath: vscodePath,
       args: [
         `--user-data-dir=${testProfileDir}`,

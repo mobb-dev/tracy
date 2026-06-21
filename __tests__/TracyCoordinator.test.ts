@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // ---------------------------------------------------------------------------
 const {
   controllerInstances,
+  gitBlameCacheInstances,
   MockTracyController,
   MockGitBlameCache,
   MockAIBlameCache,
@@ -47,15 +48,19 @@ const {
       }
     )
 
-  const MockGitBlameCache = vi
-    .fn()
-    .mockImplementation(() => ({ dispose: vi.fn() }))
+  const gitBlameCacheInstances: { dispose: ReturnType<typeof vi.fn> }[] = []
+  const MockGitBlameCache = vi.fn().mockImplementation(() => {
+    const inst = { dispose: vi.fn() }
+    gitBlameCacheInstances.push(inst)
+    return inst
+  })
   const MockAIBlameCache = vi
     .fn()
     .mockImplementation(() => ({ dispose: vi.fn() }))
 
   return {
     controllerInstances,
+    gitBlameCacheInstances,
     MockTracyController,
     MockGitBlameCache,
     MockAIBlameCache,
@@ -154,6 +159,7 @@ describe('TracyCoordinator', () => {
     capturedSelectionHandler = undefined
     capturedCommandHandler = undefined
     controllerInstances.length = 0
+    gitBlameCacheInstances.length = 0
     mockVSCode.window.activeTextEditor = undefined
     mockVSCode.window.visibleTextEditors = []
 
@@ -226,6 +232,28 @@ describe('TracyCoordinator', () => {
       await new Promise((r) => setTimeout(r, 0))
 
       expect(controllerInstances[0].handleEditorChange).toHaveBeenCalled()
+    })
+
+    it('keeps building other controllers (and disposes caches) when one controller throws', async () => {
+      // REPO_A's controller construction fails; REPO_B must still be built and
+      // the coordinator must not throw. The failed repo's already-constructed
+      // caches must be disposed so they can't orphan listeners.
+      MockTracyController.mockImplementationOnce(() => {
+        throw new Error('controller init failed')
+      })
+
+      const { TracyCoordinator } = await import('../src/ui/TracyCoordinator')
+      expect(
+        () => new TracyCoordinator([REPO_A, REPO_B], ORG_ID, makeView())
+      ).not.toThrow()
+
+      // Both attempted, only the survivor (REPO_B) registered.
+      expect(MockTracyController).toHaveBeenCalledTimes(2)
+      expect(controllerInstances).toHaveLength(1)
+      expect(controllerInstances[0]!._gitRoot).toBe(REPO_B.gitRoot)
+
+      // The failed repo's GitBlameCache was disposed (no orphaned listener).
+      expect(gitBlameCacheInstances[0]!.dispose).toHaveBeenCalled()
     })
   })
 

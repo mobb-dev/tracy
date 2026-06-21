@@ -255,7 +255,7 @@ export function prepareSessionForUpload(
 
     const toolStatus = bubble.toolFormerData?.status
     if (toolStatus && !TERMINAL_TOOL_STATUSES.has(toolStatus)) {
-      logger.info(
+      logger.debug(
         `Skipping incomplete bubble ${extractBubbleId(row.key)} (status: ${toolStatus})`
       )
       newIncomplete.push({ key: row.key, firstSeenAt: now })
@@ -315,7 +315,7 @@ export function revisitIncompleteBubbles(
     const recordId = extractBubbleId(row.key)
     if (isTerminal || isStuck) {
       const waitSec = Math.round((now - firstSeenAt) / 1000)
-      logger.info(
+      logger.debug(
         `Revisited bubble ${recordId} → uploading (${isStuck ? 'stuck >30min' : toolStatus}, waited ${waitSec}s)`
       )
       records.push({

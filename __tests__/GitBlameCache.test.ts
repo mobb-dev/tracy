@@ -1,11 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+const noopDisposable = { dispose: vi.fn() }
+
 vi.mock('vscode', () => ({
   extensions: {
     getExtension: vi.fn(() => ({
+      isActive: true,
+      activate: vi.fn().mockResolvedValue(undefined),
       exports: {
         getAPI: vi.fn(() => ({
+          state: 'initialized',
           repositories: [],
+          onDidChangeState: vi.fn(() => noopDisposable),
+          onDidOpenRepository: vi.fn(() => noopDisposable),
         })),
       },
     })),
@@ -45,6 +52,87 @@ describe('GitBlameCache', () => {
 
   afterEach(() => {
     vi.resetAllMocks()
+  })
+
+  it('activates vscode.git when not yet active, then attaches the HEAD listener to the matching repo', async () => {
+    // Regression for T-525: reading `.exports` before vscode.git is activated
+    // throws ("Extension 'vscode.git' is not known or not activated"); the old
+    // synchronous constructor surfaced that and aborted extension activation.
+    const vscode = await import('vscode')
+    let activated = false
+    const onDidChange = vi.fn(() => ({ dispose: vi.fn() }))
+    const repo = {
+      rootUri: { fsPath: '/repo' },
+      state: { HEAD: { commit: 'abc123' }, onDidChange },
+    }
+    const api = {
+      state: 'initialized',
+      repositories: [repo],
+      onDidChangeState: vi.fn(() => ({ dispose: vi.fn() })),
+      onDidOpenRepository: vi.fn(() => ({ dispose: vi.fn() })),
+    }
+    const activate = vi.fn(async () => {
+      activated = true
+    })
+    const ext = {
+      get isActive() {
+        return activated
+      },
+      activate,
+      get exports() {
+        if (!activated) {
+          throw new Error(
+            "Extension 'vscode.git' is not known or not activated"
+          )
+        }
+        return { getAPI: () => api }
+      },
+    }
+    ;(
+      vscode.extensions.getExtension as unknown as ReturnType<typeof vi.fn>
+    ).mockReturnValueOnce(ext)
+
+    const { GitBlameCache } = await import('../src/ui/GitBlameCache')
+
+    // Constructor must not throw despite `.exports` throwing pre-activation.
+    expect(() => new GitBlameCache('/repo')).not.toThrow()
+
+    // It activates vscode.git first, then actually wires the HEAD listener.
+    await vi.waitFor(() => expect(activate).toHaveBeenCalled())
+    await vi.waitFor(() => expect(onDidChange).toHaveBeenCalled())
+  })
+
+  it('does not throw and warns when vscode.git is absent', async () => {
+    const vscode = await import('vscode')
+    ;(
+      vscode.extensions.getExtension as unknown as ReturnType<typeof vi.fn>
+    ).mockReturnValueOnce(undefined)
+
+    const { GitBlameCache } = await import('../src/ui/GitBlameCache')
+    const { logger } = await import('../src/shared/logger')
+
+    expect(() => new GitBlameCache('/repo')).not.toThrow()
+    await vi.waitFor(() => expect(logger.warn).toHaveBeenCalled())
+  })
+
+  it('does not throw when vscode.git activation rejects', async () => {
+    const vscode = await import('vscode')
+    const ext = {
+      isActive: false,
+      activate: vi.fn().mockRejectedValue(new Error('activation failed')),
+      get exports(): unknown {
+        throw new Error("Extension 'vscode.git' is not known or not activated")
+      },
+    }
+    ;(
+      vscode.extensions.getExtension as unknown as ReturnType<typeof vi.fn>
+    ).mockReturnValueOnce(ext)
+
+    const { GitBlameCache } = await import('../src/ui/GitBlameCache')
+    const { logger } = await import('../src/shared/logger')
+
+    expect(() => new GitBlameCache('/repo')).not.toThrow()
+    await vi.waitFor(() => expect(logger.warn).toHaveBeenCalled())
   })
 
   it('does not hang when git cannot be spawned (error event)', async () => {
