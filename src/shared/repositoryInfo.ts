@@ -631,7 +631,18 @@ async function discoverRepoFromFilePath(
 
     return repo
   } catch (err) {
-    logger.error({ err }, `Failed to discover repo from file path: ${filePath}`)
+    const isEnoent = (err as NodeJS.ErrnoException).code === 'ENOENT'
+    if (isEnoent) {
+      logger.warn(
+        { err },
+        `Failed to discover repo from file path: ${filePath}`
+      )
+    } else {
+      logger.error(
+        { err },
+        `Failed to discover repo from file path: ${filePath}`
+      )
+    }
     return null
   }
 }
