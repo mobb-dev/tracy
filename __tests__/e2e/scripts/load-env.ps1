@@ -24,6 +24,9 @@ if (-not (Test-Path $EnvFile)) {
 $sensitivePatterns = @(
   'TOKEN', 'SECRET', 'PASSWORD', 'PRIVATE_KEY', 'PAT',
   'AWS_', 'ANTHROPIC_API_KEY', 'GITHUB_', 'DOTENV_',
+  # LiteLLM proxy virtual key (sk-...). Comes from the dotenv vault, not a GitHub
+  # secret, so it is NOT auto-masked — and its name matches none of the patterns above.
+  'LLM_PROXY_CI_KEY',
   'VSCODE_STATE_VSCDB_B64', 'CURSOR_STATE_VSCDB_B64'
 )
 function Test-IsSensitive([string]$name) {

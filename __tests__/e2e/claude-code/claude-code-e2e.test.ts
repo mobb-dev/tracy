@@ -155,8 +155,17 @@ describe('Claude Code E2E with Hook Integration', () => {
         process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY
       const hasBedrockToken = process.env.AWS_BEARER_TOKEN_BEDROCK
       const hasAnthropicKey = process.env.ANTHROPIC_API_KEY
+      // Proxy / LLM-gateway mode (CI): Claude Code routes through the LiteLLM proxy via
+      // ANTHROPIC_BEDROCK_BASE_URL + a custom Authorization header (the proxy holds the AWS
+      // creds and signs with its instance role). The virtual key is NOT in
+      // AWS_BEARER_TOKEN_BEDROCK in this mode, so detect the gateway explicitly.
+      const hasProxyGateway = process.env.ANTHROPIC_BEDROCK_BASE_URL
 
-      if (hasBedrockToken) {
+      if (hasProxyGateway) {
+        console.log('  ✅ LiteLLM proxy gateway configured')
+        console.log(`     Region: ${process.env.AWS_REGION || 'us-west-2'}`)
+        tracker.mark('AWS Bedrock Configured')
+      } else if (hasBedrockToken) {
         console.log('  ✅ AWS Bedrock bearer token found')
         console.log(`     Region: ${process.env.AWS_REGION || 'us-west-2'}`)
         tracker.mark('AWS Bedrock Configured')
@@ -172,7 +181,10 @@ describe('Claude Code E2E with Hook Integration', () => {
       } else {
         console.error('❌ No API credentials found')
         console.error(
-          '   Set AWS_BEARER_TOKEN_BEDROCK (for Bedrock bearer token)'
+          '   Set ANTHROPIC_BEDROCK_BASE_URL (for the LiteLLM proxy gateway)'
+        )
+        console.error(
+          '   Or AWS_BEARER_TOKEN_BEDROCK (for Bedrock bearer token)'
         )
         console.error('   Or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY')
         console.error('   Or ANTHROPIC_API_KEY')

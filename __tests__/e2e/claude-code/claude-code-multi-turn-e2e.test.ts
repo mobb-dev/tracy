@@ -117,14 +117,17 @@ describe('Claude Code E2E — Multi-Turn Incremental Cursor', () => {
       }
 
       // ==== Step 2: Verify API credentials ====
+      // ANTHROPIC_BEDROCK_BASE_URL = LiteLLM proxy gateway mode (CI); the virtual key rides in
+      // a custom Authorization header, not AWS_BEARER_TOKEN_BEDROCK.
       const hasCredentials =
+        process.env.ANTHROPIC_BEDROCK_BASE_URL ||
         process.env.AWS_BEARER_TOKEN_BEDROCK ||
         (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) ||
         process.env.ANTHROPIC_API_KEY
 
       if (!hasCredentials) {
         throw new Error(
-          'API credentials required (AWS_BEARER_TOKEN_BEDROCK, AWS keys, or ANTHROPIC_API_KEY)'
+          'API credentials required (ANTHROPIC_BEDROCK_BASE_URL, AWS_BEARER_TOKEN_BEDROCK, AWS keys, or ANTHROPIC_API_KEY)'
         )
       }
       tracker.mark('API Credentials Configured')

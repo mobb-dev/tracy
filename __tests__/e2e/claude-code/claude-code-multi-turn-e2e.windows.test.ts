@@ -182,16 +182,18 @@ describe.skipIf(process.platform !== 'win32')('Claude Code E2E — Multi-Turn In
 
       // ==== Step 2: Verify API credentials ====
       tracker.logTimestamp('Checking API credentials')
+      // ANTHROPIC_BEDROCK_BASE_URL = LiteLLM proxy gateway mode (virtual key in a custom header).
       const hasCredentials =
+        process.env.ANTHROPIC_BEDROCK_BASE_URL ||
         process.env.AWS_BEARER_TOKEN_BEDROCK ||
         (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) ||
         process.env.ANTHROPIC_API_KEY
 
       if (!hasCredentials) {
         console.error('  FATAL: No API credentials found')
-        console.error('  Checked: AWS_BEARER_TOKEN_BEDROCK, AWS_ACCESS_KEY_ID+SECRET, ANTHROPIC_API_KEY')
+        console.error('  Checked: ANTHROPIC_BEDROCK_BASE_URL, AWS_BEARER_TOKEN_BEDROCK, AWS_ACCESS_KEY_ID+SECRET, ANTHROPIC_API_KEY')
         throw new Error(
-          'API credentials required (AWS_BEARER_TOKEN_BEDROCK, AWS keys, or ANTHROPIC_API_KEY)'
+          'API credentials required (ANTHROPIC_BEDROCK_BASE_URL, AWS_BEARER_TOKEN_BEDROCK, AWS keys, or ANTHROPIC_API_KEY)'
         )
       }
       console.log('  API credentials found')

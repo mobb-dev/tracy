@@ -204,8 +204,14 @@ describe.skipIf(process.platform !== 'win32')('Claude Code E2E with Hook Integra
         process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY
       const hasBedrockToken = process.env.AWS_BEARER_TOKEN_BEDROCK
       const hasAnthropicKey = process.env.ANTHROPIC_API_KEY
+      // LiteLLM proxy gateway mode (the virtual key rides in a custom Authorization header).
+      const hasProxyGateway = process.env.ANTHROPIC_BEDROCK_BASE_URL
 
-      if (hasBedrockToken) {
+      if (hasProxyGateway) {
+        console.log('  Auth method: LiteLLM proxy gateway')
+        console.log(`  Region: ${process.env.AWS_REGION || 'us-west-2'}`)
+        tracker.mark('AWS Bedrock Configured')
+      } else if (hasBedrockToken) {
         console.log('  Auth method: AWS Bedrock bearer token')
         console.log(`  Region: ${process.env.AWS_REGION || 'us-west-2'}`)
         tracker.mark('AWS Bedrock Configured')
