@@ -5,7 +5,7 @@
 # Usage: ./run-docker-test.sh <image-tag> <ide-name> <requires-auth>
 #
 # Environment variables:
-#   - AWS_BEARER_TOKEN_BEDROCK: AWS bearer token for Bedrock
+#   - LITELLM_API_KEY: LiteLLM proxy virtual key (Bedrock reached via the proxy)
 #   - AWS_ACCESS_KEY_ID: AWS access key
 #   - AWS_SECRET_ACCESS_KEY: AWS secret key
 #   - AWS_REGION: AWS region (for Claude Code auth)
@@ -44,8 +44,8 @@ DOCKER_ENV_ARGS="-e CI=true"
 
 # Add auth env vars if required
 if [ "$REQUIRES_AUTH" == "true" ]; then
-  if [ -n "$AWS_BEARER_TOKEN_BEDROCK" ]; then
-    DOCKER_ENV_ARGS="$DOCKER_ENV_ARGS -e AWS_BEARER_TOKEN_BEDROCK -e AWS_REGION -e CLAUDE_CODE_USE_BEDROCK"
+  if [ -n "$LITELLM_API_KEY" ]; then
+    DOCKER_ENV_ARGS="$DOCKER_ENV_ARGS -e LITELLM_API_KEY -e AWS_REGION -e CLAUDE_CODE_USE_BEDROCK"
   elif [ -n "$AWS_ACCESS_KEY_ID" ] && [ -n "$AWS_SECRET_ACCESS_KEY" ]; then
     DOCKER_ENV_ARGS="$DOCKER_ENV_ARGS -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION"
   fi

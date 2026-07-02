@@ -83,23 +83,24 @@ Get-Content $EnvFile | ForEach-Object {
 }
 
 if ($MapBedrock) {
-  if (-not $env:AWS_BEDROCK_ACCESS_KEY_ID_V2 -or -not $env:AWS_BEDROCK_ACCESS_KEY_V2) {
-    Write-Error "MapBedrock requested but AWS_BEDROCK_ACCESS_KEY_ID_V2 or AWS_BEDROCK_ACCESS_KEY_V2 is missing — refusing to export empty AWS credentials"
+  # Route Claude Code through the LiteLLM proxy "gateway" — the sole path to Bedrock. The proxy
+  # holds AWS creds and signs to real Bedrock with its own role; the client presents a LiteLLM
+  # virtual key in a custom Authorization header. The sk- virtual key is NOT a valid AWS Bedrock
+  # API key, so client-side AWS auth is skipped (the AWS SDK would reject it before any request
+  # leaves the runner). Requires the proxy reachable (Twingate) + a provisioned key.
+  if (-not $env:LLM_PROXY_BASE_URL -or -not $env:LITELLM_API_KEY) {
+    Write-Error "MapBedrock requested but LLM_PROXY_BASE_URL or LITELLM_API_KEY is missing — Claude Code must reach Bedrock through the LiteLLM proxy gateway"
     exit 1
   }
 
-  $region = if ($env:AWS_BEDROCK_REGION) { $env:AWS_BEDROCK_REGION } else { "us-west-2" }
+  Write-Host "::add-mask::$($env:LITELLM_API_KEY)"
 
-  Write-Host "::add-mask::$($env:AWS_BEDROCK_ACCESS_KEY_ID_V2)"
-  Write-Host "::add-mask::$($env:AWS_BEDROCK_ACCESS_KEY_V2)"
-
-  "AWS_ACCESS_KEY_ID=$($env:AWS_BEDROCK_ACCESS_KEY_ID_V2)" | Out-File -FilePath $env:GITHUB_ENV -Append
-  "AWS_SECRET_ACCESS_KEY=$($env:AWS_BEDROCK_ACCESS_KEY_V2)" | Out-File -FilePath $env:GITHUB_ENV -Append
-  "AWS_DEFAULT_REGION=$region" | Out-File -FilePath $env:GITHUB_ENV -Append
-  "AWS_REGION=$region" | Out-File -FilePath $env:GITHUB_ENV -Append
   "CLAUDE_CODE_USE_BEDROCK=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+  "CLAUDE_CODE_SKIP_BEDROCK_AUTH=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+  "ANTHROPIC_BEDROCK_BASE_URL=$($env:LLM_PROXY_BASE_URL)/bedrock" | Out-File -FilePath $env:GITHUB_ENV -Append
+  "ANTHROPIC_CUSTOM_HEADERS=Authorization: Bearer $($env:LITELLM_API_KEY)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-  Write-Host "Mapped Bedrock credentials (region: $region)"
+  Write-Host "Configured Claude Code LiteLLM proxy gateway"
 }
 
 Write-Host "Environment loaded"

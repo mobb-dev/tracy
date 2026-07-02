@@ -153,12 +153,12 @@ describe('Claude Code E2E with Hook Integration', () => {
       tracker.logTimestamp('Checking AWS Bedrock configuration')
       const hasAwsCredentials =
         process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY
-      const hasBedrockToken = process.env.AWS_BEARER_TOKEN_BEDROCK
+      const hasBedrockToken = process.env.LITELLM_API_KEY
       const hasAnthropicKey = process.env.ANTHROPIC_API_KEY
       // Proxy / LLM-gateway mode (CI): Claude Code routes through the LiteLLM proxy via
       // ANTHROPIC_BEDROCK_BASE_URL + a custom Authorization header (the proxy holds the AWS
       // creds and signs with its instance role). The virtual key is NOT in
-      // AWS_BEARER_TOKEN_BEDROCK in this mode, so detect the gateway explicitly.
+      // LITELLM_API_KEY in this mode, so detect the gateway explicitly.
       const hasProxyGateway = process.env.ANTHROPIC_BEDROCK_BASE_URL
 
       if (hasProxyGateway) {
@@ -184,7 +184,7 @@ describe('Claude Code E2E with Hook Integration', () => {
           '   Set ANTHROPIC_BEDROCK_BASE_URL (for the LiteLLM proxy gateway)'
         )
         console.error(
-          '   Or AWS_BEARER_TOKEN_BEDROCK (for Bedrock bearer token)'
+          '   Or LITELLM_API_KEY (the LiteLLM proxy virtual key)'
         )
         console.error('   Or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY')
         console.error('   Or ANTHROPIC_API_KEY')
@@ -369,7 +369,7 @@ describe('Claude Code E2E with Hook Integration', () => {
       // Run Claude Code in print mode (non-interactive)
       // --permission-mode bypassPermissions skips permission prompts for automated testing
       // --debug enables debug output which also fixes some initialization issues
-      // Inherit all env vars including AWS_BEARER_TOKEN_BEDROCK, CLAUDE_CODE_USE_BEDROCK, etc.
+      // Inherit all env vars including LITELLM_API_KEY, CLAUDE_CODE_USE_BEDROCK, etc.
       claudeProcess = spawn(
         'claude',
         [

@@ -309,9 +309,39 @@ async function loginToGitHub(
     )
   }
 
-  const errorMsg = page.locator('.flash-error, .js-flash-alert')
-  if (await errorMsg.isVisible({ timeout: 1000 }).catch(() => false)) {
-    throw new Error(`Login failed: ${await errorMsg.textContent()}`)
+  // Detect a rejected credential. GitHub's error-banner class markup changes over
+  // time (the old `.flash-error` selector silently stopped matching), so match on
+  // TEXT too. Throwing here fails fast with an actionable message AND — crucially —
+  // stops a failed login from persisting a bogus, unauthenticated storageState
+  // that would poison cross-run session reuse.
+  const errorText = await page
+    .locator(
+      '.flash-error, .js-flash-alert, ' +
+        'text=/Incorrect username or password|Unable to sign in|too many (failed )?sign|try again later/i'
+    )
+    .first()
+    .textContent({ timeout: 1000 })
+    .catch(() => null)
+
+  // Final guard: after a successful sign-in GitHub redirects away from the login
+  // form. Still sitting on /login or /session means the credential was rejected
+  // (wrong password, IP/velocity block, or rate limit) — the OAuth authorize would
+  // otherwise bounce back to /login and we'd cache an unauthenticated session.
+  const finalPath = (() => {
+    try {
+      return new URL(page.url()).pathname
+    } catch {
+      return ''
+    }
+  })()
+  if (errorText || finalPath === '/login' || finalPath === '/session') {
+    throw new Error(
+      `GitHub login did not authenticate (path=${finalPath || '?'}` +
+        (errorText ? `, message="${errorText.trim()}"` : '') +
+        '). The credential may be correct yet blocked from this IP (CI ' +
+        'datacenter) or rate-limited after repeated attempts. Not persisting an ' +
+        'unauthenticated session.'
+    )
   }
 }
 

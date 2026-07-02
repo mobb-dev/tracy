@@ -56,7 +56,7 @@ export function logRelevantEnvVars(extraKeys?: string[]): void {
     'AWS_DEFAULT_REGION', 'AWS_REGION', 'CLAUDE_CODE_USE_BEDROCK',
     ...(extraKeys ?? []),
   ]
-  const secret = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_BEARER_TOKEN_BEDROCK', 'ANTHROPIC_API_KEY']
+  const secret = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'LITELLM_API_KEY', 'ANTHROPIC_API_KEY']
 
   console.log('  ┌─────────────────────────────────────────────')
   console.log('  │ ENVIRONMENT VARIABLES')

@@ -202,7 +202,7 @@ describe.skipIf(process.platform !== 'win32')('Claude Code E2E with Hook Integra
       tracker.logTimestamp('Checking AWS Bedrock configuration')
       const hasAwsCredentials =
         process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY
-      const hasBedrockToken = process.env.AWS_BEARER_TOKEN_BEDROCK
+      const hasBedrockToken = process.env.LITELLM_API_KEY
       const hasAnthropicKey = process.env.ANTHROPIC_API_KEY
       // LiteLLM proxy gateway mode (the virtual key rides in a custom Authorization header).
       const hasProxyGateway = process.env.ANTHROPIC_BEDROCK_BASE_URL
